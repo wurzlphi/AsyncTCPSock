@@ -58,7 +58,7 @@ void _asynctcpsock_task(void*);
 static uint8_t _readBuffer[MAX_PAYLOAD_SIZE];
 
 // Start async socket task
-static bool _start_asyncsock_task(void) {
+static bool _start_asyncsock_task() {
     if (!_asyncsock_service_task_handle) {
         log_i(
             "Creating asyncTcpSock task running in core %d (-1 for any available "
@@ -239,7 +239,7 @@ AsyncSocketBase::AsyncSocketBase() {
     xSemaphoreGiveRecursive(_asyncsock_mutex);
 }
 
-std::list<AsyncSocketBase*>& AsyncSocketBase::_getSocketBaseList(void) {
+std::list<AsyncSocketBase*>& AsyncSocketBase::_getSocketBaseList() {
     // List of monitored socket objects
     static std::list<AsyncSocketBase*> _socketBaseList;
     return _socketBaseList;
@@ -595,7 +595,7 @@ void _tcpsock_dns_found(const char* name, struct ip_addr* ipaddr, void* arg) {
 }
 
 // DNS resolving has finished. Check for error or connect
-void AsyncClient::_sockDelayedConnect(void) {
+void AsyncClient::_sockDelayedConnect() {
     if (_connect_addr.u_addr.ip4.addr) {
 #if ASYNC_TCP_SSL_ENABLED
         connect(IPAddress(_connect_addr.u_addr.ip4.addr), _connect_port, _secure);
@@ -614,7 +614,7 @@ void AsyncClient::_sockDelayedConnect(void) {
 }
 
 #if ASYNC_TCP_SSL_ENABLED
-int AsyncClient::_runSSLHandshakeLoop(void) {
+int AsyncClient::_runSSLHandshakeLoop() {
     int res = 0;
 
     while (!_handshake_done) {
@@ -638,7 +638,7 @@ int AsyncClient::_runSSLHandshakeLoop(void) {
 }
 #endif
 
-bool AsyncClient::_sockIsWriteable(void) {
+bool AsyncClient::_sockIsWriteable() {
     int res;
     int sockerr;
     socklen_t len;
@@ -732,7 +732,7 @@ bool AsyncClient::_sockIsWriteable(void) {
     return activity;
 }
 
-bool AsyncClient::_flushWriteQueue(void) {
+bool AsyncClient::_flushWriteQueue() {
     bool activity = false;
 
     if (_socket == -1)
@@ -848,7 +848,7 @@ void AsyncClient::_notifyWrittenBuffers(std::deque<notify_writebuf>& notifyqueue
         _error(write_errno);
 }
 
-void AsyncClient::_sockIsReadable(void) {
+void AsyncClient::_sockIsReadable() {
     _rx_last_packet = millis();
     errno = 0;
     ssize_t r;
@@ -899,7 +899,7 @@ void AsyncClient::_sockIsReadable(void) {
     }
 }
 
-void AsyncClient::_sockPoll(void) {
+void AsyncClient::_sockPoll() {
     if (!connected())
         return;
 
@@ -963,7 +963,7 @@ void AsyncClient::_sockPoll(void) {
     }
 }
 
-void AsyncClient::_removeAllCallbacks(void) {
+void AsyncClient::_removeAllCallbacks() {
     _connect_cb = NULL;
     _connect_cb_arg = NULL;
     _discard_cb = NULL;
@@ -980,7 +980,7 @@ void AsyncClient::_removeAllCallbacks(void) {
     _poll_cb_arg = NULL;
 }
 
-void AsyncClient::_close(void) {
+void AsyncClient::_close() {
     // Serial.print("AsyncClient::_close: "); Serial.println(_socket);
     xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
     _conn_state = 0;
@@ -1083,16 +1083,20 @@ bool AsyncClient::send() {
     return true;
 }
 
-bool AsyncClient::_pendingWrite(void) {
+bool AsyncClient::_pendingWrite() {
     xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
     bool pending = ((_conn_state > 0 && _conn_state < 4) || _writeQueue.size() > 0);
     xSemaphoreGive(_write_mutex);
     return pending;
 }
 
+bool AsyncClient::_isServer() {
+    return false;
+}
+
 // In normal operation this should be a no-op. Will only free something in case
 // of errors before all data was written.
-void AsyncClient::_clearWriteQueue(void) {
+void AsyncClient::_clearWriteQueue() {
     xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
     while (_writeQueue.size() > 0) {
         if (_writeQueue.front().owned) {
@@ -1297,7 +1301,7 @@ void AsyncServer::end() {
     xSemaphoreGiveRecursive(_asyncsock_mutex);
 }
 
-void AsyncServer::_sockIsReadable(void) {
+void AsyncServer::_sockIsReadable() {
     // Serial.print("AsyncServer::_sockIsReadable: "); Serial.println(_socket);
 
     if (_connect_cb) {
@@ -1318,4 +1322,26 @@ void AsyncServer::_sockIsReadable(void) {
             _connect_cb(_connect_cb_arg, c);
         }
     }
+}
+
+bool AsyncServer::_sockIsWriteable()  {
+    // dummy impl
+    return false;
+}
+
+void AsyncServer::_sockPoll() {
+    // dummy impl
+}
+
+void AsyncServer::_sockDelayedConnect() {
+    // dummy impl
+}
+
+bool AsyncServer::_pendingWrite() {
+    // dummy impl
+    return false;
+}
+
+bool AsyncServer::_isServer() {
+    return true;
 }

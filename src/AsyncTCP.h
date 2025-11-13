@@ -68,7 +68,7 @@ typedef std::function<void(void*, AsyncClient*, uint32_t time)> AcTimeoutHandler
 class AsyncSocketBase
 {
 private:
-    static std::list<AsyncSocketBase *> & _getSocketBaseList(void);
+    static std::list<AsyncSocketBase*>& _getSocketBaseList();
 
 protected:
     int _socket = -1;
@@ -76,16 +76,16 @@ protected:
     bool _isdnsfinished = false;
     uint32_t _sock_lastactivity = 0;
 
-    virtual void _sockIsReadable(void) {}     // Action to take on readable socket
-    virtual bool _sockIsWriteable(void) { return false; }    // Action to take on writable socket
-    virtual void _sockPoll(void) {}           // Action to take on idle socket activity poll
-    virtual void _sockDelayedConnect(void) {} // Action to take on DNS-resolve finished
+    virtual void _sockIsReadable() = 0;     // Action to take on readable socket
+    virtual bool _sockIsWriteable() = 0;    // Action to take on writable socket
+    virtual void _sockPoll() = 0;           // Action to take on idle socket activity poll
+    virtual void _sockDelayedConnect() = 0; // Action to take on DNS-resolve finished
 
-    virtual bool _pendingWrite(void) { return false; }  // Test if there is data pending to be written
-    virtual bool _isServer(void) { return false; }      // Will a read from this socket result in one more client?
+    virtual bool _pendingWrite() = 0;  // Test if there is data pending to be written
+    virtual bool _isServer() = 0;      // Will a read from this socket result in one more client?
 
 public:
-    AsyncSocketBase(void);
+    AsyncSocketBase();
     virtual ~AsyncSocketBase();
 
     friend void _asynctcpsock_task(void *);
@@ -161,11 +161,13 @@ class AsyncClient : public AsyncSocketBase
 //    const char * stateToString();
 
   protected:
-    bool _sockIsWriteable(void);
-    void _sockIsReadable(void);
-    void _sockPoll(void);
-    void _sockDelayedConnect(void);
-    bool _pendingWrite(void);
+    void _sockIsReadable() override;
+    bool _sockIsWriteable() override;
+    void _sockPoll() override;
+    void _sockDelayedConnect() override;
+
+    bool _pendingWrite() override;
+    bool _isServer() override;
 
   private:
 
@@ -242,10 +244,10 @@ class AsyncClient : public AsyncSocketBase
     uint8_t _conn_state;
 
     void _error(int8_t err);
-    void _close(void);
-    void _removeAllCallbacks(void);
-    bool _flushWriteQueue(void);
-    void _clearWriteQueue(void);
+    void _close();
+    void _removeAllCallbacks();
+    bool _flushWriteQueue();
+    void _clearWriteQueue();
     void _collectNotifyWrittenBuffers(std::deque<notify_writebuf> &, int &);
     void _notifyWrittenBuffers(std::deque<notify_writebuf> &, int);
 
@@ -288,10 +290,13 @@ class AsyncServer : public AsyncSocketBase
     void* _connect_cb_arg;
 
     // Listening socket is readable on incoming connection
-    void _sockIsReadable(void);
+    void _sockIsReadable() override;
+    bool _sockIsWriteable() override;
+    void _sockPoll() override;
+    void _sockDelayedConnect() override;
 
-    // Mark this class as a server
-    bool _isServer(void) { return true; }
+    bool _pendingWrite() override;
+    bool _isServer() override;
 };
 
 
