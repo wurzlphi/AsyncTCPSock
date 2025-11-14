@@ -1,0 +1,29 @@
+#ifndef ASYNCTCPSOCK_CONFIGURATION_HPP
+#define ASYNCTCPSOCK_CONFIGURATION_HPP
+
+#ifndef CONFIG_ASYNC_TCP_RUNNING_CORE
+// If core is not defined, then we are running in Arduino or PIO
+#define CONFIG_ASYNC_TCP_RUNNING_CORE -1  // any available core
+#define CONFIG_ASYNC_TCP_USE_WDT 1  // if enabled, adds between 33us and 200us per event
+#endif
+
+#ifndef CONFIG_ASYNC_TCP_STACK
+#define CONFIG_ASYNC_TCP_STACK 16384  // 8192 * 2
+#endif
+
+#ifndef CONFIG_ASYNC_TCP_TASK_PRIORITY
+#define CONFIG_ASYNC_TCP_TASK_PRIORITY 18
+#endif
+
+#ifndef CONFIG_ASYNC_TCP_POLL_INTERVAL
+#define CONFIG_ASYNC_TCP_POLL_INTERVAL 125
+#endif
+
+#ifndef CONFIG_ASYNC_TCP_MAX_PAYLOAD_SIZE
+#define CONFIG_ASYNC_TCP_MAX_PAYLOAD_SIZE 1360
+#endif
+
+#define ASYNC_MAX_ACK_TIME 5000
+#define SSL_HANDSHAKE_TIMEOUT 5000  // timeout to complete SSL handshake
+
+#endif

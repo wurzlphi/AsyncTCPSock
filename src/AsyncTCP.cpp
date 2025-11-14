@@ -23,7 +23,7 @@
 
 #include "AsyncTCP.h"
 
-#include <list>
+#include <atomic>
 
 #include <errno.h>
 #include <lwip/dns.h>
@@ -31,24 +31,13 @@
 #include <lwip/sockets.h>
 
 #include "Arduino.h"  // IWYU pragma: keep
-#include "esp_task_wdt.h"
-#include "freertos/idf_additions.h"
 #include "lwip/sockets.h"
-#include "portmacro.h"
+
 
 #undef close
 #undef connect
 #undef write
 #undef read
-
-static TaskHandle_t _asyncsock_service_task_handle = NULL;
-static SemaphoreHandle_t _asyncsock_mutex = NULL;
-
-typedef std::list<AsyncSocketBase*>::iterator sockIterator;
-
-void _asynctcpsock_task(void*);
-
-#define ASYNCTCPSOCK_POLL_INTERVAL 125
 
 #define MAX_PAYLOAD_SIZE 1360
 
@@ -56,205 +45,6 @@ void _asynctcpsock_task(void*);
 // and all socket clients are serviced sequentially, only one read buffer
 // is needed, and it can therefore be statically allocated
 static uint8_t _readBuffer[MAX_PAYLOAD_SIZE];
-
-// Start async socket task
-static bool _start_asyncsock_task() {
-    if (!_asyncsock_service_task_handle) {
-        log_i(
-            "Creating asyncTcpSock task running in core %d (-1 for any available "
-            "core)...",
-            CONFIG_ASYNC_TCP_RUNNING_CORE);
-        xTaskCreateUniversal(_asynctcpsock_task, "asyncTcpSock", CONFIG_ASYNC_TCP_STACK,
-                             NULL, CONFIG_ASYNC_TCP_TASK_PRIORITY,
-                             &_asyncsock_service_task_handle,
-                             CONFIG_ASYNC_TCP_RUNNING_CORE);
-        if (!_asyncsock_service_task_handle)
-            return false;
-    }
-    return true;
-}
-
-void enter_wdt() {
-#if CONFIG_ASYNC_TCP_USE_WDT
-    if (esp_task_wdt_add(NULL) != ESP_OK) {
-        log_e("Failed to add async task to WDT");
-    }
-#endif
-}
-
-void leave_wdt() {
-#if CONFIG_ASYNC_TCP_USE_WDT
-    if (esp_task_wdt_delete(NULL) != ESP_OK) {
-        log_e("Failed to remove loop task from WDT");
-    }
-#endif
-}
-
-// Actual asynchronous socket task
-void _asynctcpsock_task(void*) {
-    auto& _socketBaseList = AsyncSocketBase::_getSocketBaseList();
-
-    std::vector<AsyncSocketBase*> workingCopy;
-#ifdef CONFIG_LWIP_MAX_SOCKETS
-    workingCopy.reserve(CONFIG_LWIP_MAX_SOCKETS);
-#endif
-
-    while (true) {
-        fd_set sockSet_r;
-        fd_set sockSet_w;
-        int max_sock = 0;
-
-        xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-        // Collect all of the active sockets into socket set. Half-destroyed
-        // connections should have set _socket to -1 and therefore should not
-        // end up in the sockList.
-        FD_ZERO(&sockSet_r);
-        FD_ZERO(&sockSet_w);
-        for (const auto& it : _socketBaseList) {
-            if (it->_socket != -1) {
-#ifdef CONFIG_LWIP_MAX_SOCKETS
-                if (!it->_isServer() ||
-                    _socketBaseList.size() < CONFIG_LWIP_MAX_SOCKETS) {
-#endif
-                    FD_SET(it->_socket, &sockSet_r);
-                    if (max_sock <= it->_socket)
-                        max_sock = it->_socket + 1;
-#ifdef CONFIG_LWIP_MAX_SOCKETS
-                }
-#endif
-                if (it->_pendingWrite()) {
-                    FD_SET(it->_socket, &sockSet_w);
-                    if (max_sock <= it->_socket)
-                        max_sock = it->_socket + 1;
-                }
-                it->_selected = true;
-            }
-        }
-        xSemaphoreGiveRecursive(_asyncsock_mutex);
-
-        // Wait for activity on all monitored sockets
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = ASYNCTCPSOCK_POLL_INTERVAL * 1000;
-
-        int success = select(max_sock, &sockSet_r, &sockSet_w, NULL, &tv);
-
-        xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-        if (success > 0) {
-            {
-                // Collect and notify all writable sockets. Half-destroyed connections
-                // should have set _socket to -1 and therefore should not end up in
-                // the sockList.
-                for (const auto& it : _socketBaseList) {
-                    if (it->_selected && FD_ISSET(it->_socket, &sockSet_w)) {
-                        workingCopy.push_back(it);
-                    }
-                }
-
-                for (const auto& it : workingCopy) {
-                    enter_wdt();
-                    if (it->_sockIsWriteable()) {
-                        it->_sock_lastactivity = millis();
-                    }
-                    leave_wdt();
-                }
-                workingCopy.clear();
-            }
-            {
-                // Collect and notify all readable sockets. Half-destroyed connections
-                // should have set _socket to -1 and therefore should not end up in
-                // the sockList.
-                for (const auto& it : _socketBaseList) {
-                    if (it->_selected && FD_ISSET(it->_socket, &sockSet_r)) {
-                        workingCopy.push_back(it);
-                    }
-                }
-
-                for (const auto& it : workingCopy) {
-                    enter_wdt();
-                    it->_sock_lastactivity = millis();
-                    it->_sockIsReadable();
-                    leave_wdt();
-                }
-                workingCopy.clear();
-            }
-        }
-
-        {
-            // Collect and notify all sockets waiting for DNS completion
-            for (const auto& it : _socketBaseList) {
-                // Collect socket that has finished resolving DNS (with or without error)
-                if (it->_isdnsfinished) {
-                    workingCopy.push_back(it);
-                }
-            }
-
-            for (const auto& it : workingCopy) {
-                enter_wdt();
-                it->_isdnsfinished = false;
-                it->_sockDelayedConnect();
-                leave_wdt();
-            }
-            workingCopy.clear();
-        }
-        xSemaphoreGiveRecursive(_asyncsock_mutex);
-
-        {
-            // Collect and run activity poll on all pollable sockets
-            xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-            for (const auto& it : _socketBaseList) {
-                it->_selected = false;
-                if (millis() - it->_sock_lastactivity >= ASYNCTCPSOCK_POLL_INTERVAL) {
-                    it->_sock_lastactivity = millis();
-                    workingCopy.push_back(it);
-                }
-            }
-
-            // Run activity poll on all pollable sockets
-            for (const auto& it : workingCopy) {
-                enter_wdt();
-                it->_sockPoll();
-                leave_wdt();
-            }
-            workingCopy.clear();
-            xSemaphoreGiveRecursive(_asyncsock_mutex);
-        }
-    }
-
-    vTaskDelete(NULL);
-    _asyncsock_service_task_handle = NULL;
-}
-
-AsyncSocketBase::AsyncSocketBase() {
-    if (_asyncsock_mutex == NULL)
-        _asyncsock_mutex = xSemaphoreCreateRecursiveMutex();
-
-    _sock_lastactivity = millis();
-    _selected = false;
-
-    // Add this base socket to the monitored list
-    auto& _socketBaseList = AsyncSocketBase::_getSocketBaseList();
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-    _socketBaseList.push_back(this);
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
-}
-
-std::list<AsyncSocketBase*>& AsyncSocketBase::_getSocketBaseList() {
-    // List of monitored socket objects
-    static std::list<AsyncSocketBase*> _socketBaseList;
-    return _socketBaseList;
-}
-
-AsyncSocketBase::~AsyncSocketBase() {
-    // Remove this base socket from the monitored list
-    auto& _socketBaseList = AsyncSocketBase::_getSocketBaseList();
-
-    // The mutex is assumed to have been locked by the subclass to ensure atomic
-    // destruction, so we only release it.
-    // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-    _socketBaseList.remove(this);
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
-}
 
 AsyncClient::AsyncClient(int sockfd)
     : _connect_cb(0),
@@ -290,27 +80,24 @@ AsyncClient::AsyncClient(int sockfd)
       ,
       _writeSpaceRemaining(TCP_SND_BUF),
       _conn_state(0) {
-    _write_mutex = xSemaphoreCreateMutex();
+
     if (sockfd != -1) {
         fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK);
 
         // Updating state visible to asyncTcpSock task
-        xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
+        // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
         _conn_state = 4;
         _socket = sockfd;
         _rx_last_packet = millis();
-        xSemaphoreGiveRecursive(_asyncsock_mutex);
+        // xSemaphoreGiveRecursive(_asyncsock_mutex);
     }
 }
 
 AsyncClient::~AsyncClient() {
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-    if (_socket != -1)
+    if (isOpen())
         _close();
+
     _removeAllCallbacks();
-    vSemaphoreDelete(_write_mutex);
-    _write_mutex = NULL;
-    // xSemaphoreGiveRecursive(_asyncsock_mutex);
 }
 
 void AsyncClient::setRxTimeout(uint32_t timeout) {
@@ -330,25 +117,25 @@ void AsyncClient::setAckTimeout(uint32_t timeout) {
 }
 
 void AsyncClient::setNoDelay(bool nodelay) {
-    if (_socket == -1)
+    if (!isOpen())
         return;
 
     int flag = nodelay;
     int res = setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int));
     if (res < 0) {
-        log_e("fail on fd %d, errno: %d, \"%s\"", _socket, errno, strerror(errno));
+        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
     }
 }
 
 bool AsyncClient::getNoDelay() {
-    if (_socket == -1)
+    if (!isOpen())
         return false;
 
     int flag = 0;
     socklen_t size = sizeof(int);
     int res = getsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, &size);
     if (res < 0) {
-        log_e("fail on fd %d, errno: %d, \"%s\"", _socket, errno, strerror(errno));
+        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
     }
     return flag;
 }
@@ -393,21 +180,23 @@ void AsyncClient::onPoll(AcConnectHandler cb, void* arg) {
 }
 
 bool AsyncClient::connected() {
-    if (_socket == -1) {
+    if (!isOpen()) {
         return false;
     }
+
     return _conn_state == 4;
 }
 
 bool AsyncClient::freeable() {
-    if (_socket == -1) {
+    if (!isOpen()) {
         return true;
     }
+
     return _conn_state == 0 || _conn_state > 4;
 }
 
 uint32_t AsyncClient::getRemoteAddress() {
-    if (_socket == -1) {
+    if (!isOpen()) {
         return 0;
     }
 
@@ -420,7 +209,7 @@ uint32_t AsyncClient::getRemoteAddress() {
 }
 
 uint16_t AsyncClient::getRemotePort() {
-    if (_socket == -1) {
+    if (!isOpen()) {
         return 0;
     }
 
@@ -433,7 +222,7 @@ uint16_t AsyncClient::getRemotePort() {
 }
 
 uint32_t AsyncClient::getLocalAddress() {
-    if (_socket == -1) {
+    if (!isOpen()) {
         return 0;
     }
 
@@ -446,7 +235,7 @@ uint32_t AsyncClient::getLocalAddress() {
 }
 
 uint16_t AsyncClient::getLocalPort() {
-    if (_socket == -1) {
+    if (!isOpen()) {
         return 0;
     }
 
@@ -474,125 +263,7 @@ uint16_t AsyncClient::localPort() {
     return getLocalPort();
 }
 
-#if ASYNC_TCP_SSL_ENABLED
-bool AsyncClient::connect(IPAddress ip, uint16_t port, bool secure)
-#else
-bool AsyncClient::connect(IPAddress ip, uint16_t port)
-#endif  // ASYNC_TCP_SSL_ENABLED
-{
-    if (_socket != -1) {
-        log_w("already connected, state %d", _conn_state);
-        return false;
-    }
 
-    if (!_start_asyncsock_task()) {
-        log_e("failed to start task");
-        return false;
-    }
-
-#if ASYNC_TCP_SSL_ENABLED
-    _secure = secure;
-    _handshake_done = !secure;
-#endif  // ASYNC_TCP_SSL_ENABLED
-
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        log_e("socket: %d", errno);
-        return false;
-    }
-    int r = fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK);
-
-    uint32_t ip_addr = ip;
-    struct sockaddr_in serveraddr;
-    memset(&serveraddr, 0, sizeof(serveraddr));
-    serveraddr.sin_family = AF_INET;
-    memcpy(&(serveraddr.sin_addr.s_addr), &ip_addr, 4);
-    serveraddr.sin_port = htons(port);
-
-#ifdef EINPROGRESS
-#if EINPROGRESS != 119
-#error EINPROGRESS invalid
-#endif
-#endif
-
-    // Serial.printf("DEBUG: connect to %08x port %d using IP... ", ip_addr, port);
-    errno = 0;
-    r = ::connect(sockfd, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
-    // Serial.printf("r=%d errno=%d\r\n", r, errno);
-    if (r < 0 && errno != EINPROGRESS) {
-        // Serial.println("\t(connect failed)");
-        log_e("connect on fd %d, errno: %d, \"%s\"", sockfd, errno, strerror(errno));
-        ::close(sockfd);
-        return false;
-    }
-
-    // Updating state visible to asyncTcpSock task
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-    _conn_state = 2;
-    _socket = sockfd;
-    _rx_last_packet = millis();
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
-
-    // Socket is now connecting. Should become writable in asyncTcpSock task
-    // Serial.printf("\twaiting for connect finished on socket: %d\r\n", _socket);
-    return true;
-}
-
-void _tcpsock_dns_found(const char* name, struct ip_addr* ipaddr, void* arg);
-#if ASYNC_TCP_SSL_ENABLED
-bool AsyncClient::connect(const char* host, uint16_t port, bool secure) {
-#else
-bool AsyncClient::connect(const char* host, uint16_t port) {
-#endif  // ASYNC_TCP_SSL_ENABLED
-    ip_addr_t addr;
-
-    if (!_start_asyncsock_task()) {
-        log_e("failed to start task");
-        return false;
-    }
-
-    log_v("connect to %s port %d using DNS...", host, port);
-    err_t err =
-        dns_gethostbyname(host, &addr, (dns_found_callback)&_tcpsock_dns_found, this);
-    if (err == ERR_OK) {
-        log_v("\taddr resolved as %08x, connecting...", addr.u_addr.ip4.addr);
-#if ASYNC_TCP_SSL_ENABLED
-        _hostname = host;
-        return connect(IPAddress(addr.u_addr.ip4.addr), port, secure);
-#else
-        return connect(IPAddress(addr.u_addr.ip4.addr), port);
-#endif  // ASYNC_TCP_SSL_ENABLED
-    } else if (err == ERR_INPROGRESS) {
-        log_v("\twaiting for DNS resolution");
-        _conn_state = 1;
-        _connect_port = port;
-#if ASYNC_TCP_SSL_ENABLED
-        _hostname = host;
-        _secure = secure;
-        _handshake_done = !secure;
-#endif  // ASYNC_TCP_SSL_ENABLED
-        return true;
-    }
-    log_e("error: %d", err);
-    return false;
-}
-
-// This function runs in the LWIP thread
-void _tcpsock_dns_found(const char* name, struct ip_addr* ipaddr, void* arg) {
-    AsyncClient* c = (AsyncClient*)arg;
-    if (ipaddr) {
-        memcpy(&(c->_connect_addr), ipaddr, sizeof(struct ip_addr));
-    } else {
-        memset(&(c->_connect_addr), 0, sizeof(struct ip_addr));
-    }
-
-    // Updating state visible to asyncTcpSock task
-    // MUST NOT take _asyncsock_mutex lock, risks a deadlock if task holding lock
-    // attempts a LWIP network call.
-    c->_isdnsfinished = true;
-
-    // TODO: actually use name
-}
 
 // DNS resolving has finished. Check for error or connect
 void AsyncClient::_sockDelayedConnect() {
@@ -715,18 +386,19 @@ bool AsyncClient::_sockIsWriteable() {
             }
             break;
         case 4:
-        default:
+        default: {
             // Socket can accept some new data...
-            xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
-            if (_writeQueue.size() > 0) {
-                activity = _flushWriteQueue();
-                _collectNotifyWrittenBuffers(notifylist, sent_errno);
+            {
+                std::lock_guard lock(writeMutex);
+                if (_writeQueue.size() > 0) {
+                    activity = _flushWriteQueue();
+                    _collectNotifyWrittenBuffers(notifylist, sent_errno);
+                }
             }
-            xSemaphoreGive(_write_mutex);
 
             _notifyWrittenBuffers(notifylist, sent_errno);
-
             break;
+        }
     }
 
     return activity;
@@ -735,7 +407,7 @@ bool AsyncClient::_sockIsWriteable() {
 bool AsyncClient::_flushWriteQueue() {
     bool activity = false;
 
-    if (_socket == -1)
+    if (!isOpen())
         return false;
 
     for (auto it = _writeQueue.begin(); it != _writeQueue.end(); it++) {
@@ -789,12 +461,13 @@ bool AsyncClient::_flushWriteQueue() {
             } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // Socket is full, could not write anything
                 keep_writing = false;
-                log_w("socket %d is full", _socket);
+                log_w("socket %d is full", _socket.load());
             } else {
                 // A write error happened that should be reported
                 it->write_errno = errno;
                 keep_writing = false;
-                log_e("socket %d lwip_write() failed errno=%d", _socket, it->write_errno);
+                log_e("socket %d lwip_write() failed errno=%d", _socket.load(),
+                      it->write_errno);
             }
         } while (keep_writing && it->written < it->length);
     }
@@ -909,12 +582,13 @@ void AsyncClient::_sockPoll() {
     // written buffers are now acked here.
     std::deque<notify_writebuf> notifylist;
     int sent_errno = 0;
-    xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
-    if (_writeQueue.size() > 0) {
-        _collectNotifyWrittenBuffers(notifylist, sent_errno);
-    }
-    xSemaphoreGive(_write_mutex);
 
+    {
+        std::lock_guard lock(writeMutex);
+        if (_writeQueue.size() > 0) {
+            _collectNotifyWrittenBuffers(notifylist, sent_errno);
+        }
+    }
     _notifyWrittenBuffers(notifylist, sent_errno);
     if (!connected())
         return;
@@ -922,19 +596,21 @@ void AsyncClient::_sockPoll() {
     uint32_t now = millis();
 
     // ACK Timeout - simulated by write queue staleness
-    xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
-    if (_writeQueue.size() > 0 && !_ack_timeout_signaled && _ack_timeout) {
-        uint32_t sent_delay = now - _writeQueue.front().queued_at;
-        if (sent_delay >= _ack_timeout && _writeQueue.front().written_at == 0) {
-            _ack_timeout_signaled = true;
-            // log_w("ack timeout %d", pcb->state);
-            xSemaphoreGive(_write_mutex);
-            if (_timeout_cb)
-                _timeout_cb(_timeout_cb_arg, this, sent_delay);
-            return;
+    {
+        std::unique_lock lock(writeMutex);
+
+        if (_writeQueue.size() > 0 && !_ack_timeout_signaled && _ack_timeout) {
+            uint32_t sent_delay = now - _writeQueue.front().queued_at;
+            if (sent_delay >= _ack_timeout && _writeQueue.front().written_at == 0) {
+                _ack_timeout_signaled = true;
+                // log_w("ack timeout %d", pcb->state);
+                lock.unlock();
+                if (_timeout_cb)
+                    _timeout_cb(_timeout_cb_arg, this, sent_delay);
+                return;
+            }
         }
     }
-    xSemaphoreGive(_write_mutex);
 
     // RX Timeout? Check for readable socket before bailing out
     if (_rx_since_timeout && (now - _rx_last_packet) >= (_rx_since_timeout * 1000)) {
@@ -982,17 +658,15 @@ void AsyncClient::_removeAllCallbacks() {
 
 void AsyncClient::_close() {
     // Serial.print("AsyncClient::_close: "); Serial.println(_socket);
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
     _conn_state = 0;
-    ::close(_socket);
-    _socket = -1;
+    ::close(_socket.exchange(-1));
+
 #if ASYNC_TCP_SSL_ENABLED
     if (_sslctx != NULL) {
         delete _sslctx;
         _sslctx = NULL;
     }
 #endif
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
 
     _clearWriteQueue();
     if (_discard_cb)
@@ -1000,17 +674,15 @@ void AsyncClient::_close() {
 }
 
 void AsyncClient::_error(int8_t err) {
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
     _conn_state = 0;
-    ::close(_socket);
-    _socket = -1;
+    ::close(_socket.exchange(-1));
+
 #if ASYNC_TCP_SSL_ENABLED
     if (_sslctx != NULL) {
         delete _sslctx;
         _sslctx = NULL;
     }
 #endif
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
 
     _clearWriteQueue();
     if (_error_cb)
@@ -1053,11 +725,13 @@ size_t AsyncClient::add(const char* data, size_t size, uint8_t apiflags) {
     n_entry.written_at = 0;
     n_entry.write_errno = 0;
 
-    xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
-    _writeQueue.push_back(n_entry);
-    _writeSpaceRemaining -= will_send;
-    _ack_timeout_signaled = false;
-    xSemaphoreGive(_write_mutex);
+    {
+        std::lock_guard lock(writeMutex);
+
+        _writeQueue.push_back(n_entry);
+        _writeSpaceRemaining -= will_send;
+        _ack_timeout_signaled = false;
+    }
 
     return will_send;
 }
@@ -1075,19 +749,16 @@ bool AsyncClient::send() {
     tv.tv_usec = 0;
 
     // Write as much data as possible from queue if socket is writable
-    xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
-    int r = select(_socket + 1, NULL, &sockSet_w, NULL, &tv);
-    if (r > 0)
+    std::lock_guard lock(writeMutex);
+    int ready = select(_socket + 1, NULL, &sockSet_w, NULL, &tv);
+    if (ready > 0)
         _flushWriteQueue();
-    xSemaphoreGive(_write_mutex);
     return true;
 }
 
 bool AsyncClient::_pendingWrite() {
-    xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
-    bool pending = ((_conn_state > 0 && _conn_state < 4) || _writeQueue.size() > 0);
-    xSemaphoreGive(_write_mutex);
-    return pending;
+    std::lock_guard lock(writeMutex);
+    return (_conn_state > 0 && _conn_state < 4) || _writeQueue.size() > 0;
 }
 
 bool AsyncClient::_isServer() {
@@ -1097,7 +768,8 @@ bool AsyncClient::_isServer() {
 // In normal operation this should be a no-op. Will only free something in case
 // of errors before all data was written.
 void AsyncClient::_clearWriteQueue() {
-    xSemaphoreTake(_write_mutex, (TickType_t)portMAX_DELAY);
+    std::lock_guard lock(writeMutex);
+
     while (_writeQueue.size() > 0) {
         if (_writeQueue.front().owned) {
             if (_writeQueue.front().data != NULL)
@@ -1106,12 +778,12 @@ void AsyncClient::_clearWriteQueue() {
         _writeQueue.pop_front();
     }
     _writeSpaceRemaining = TCP_SND_BUF;
-    xSemaphoreGive(_write_mutex);
 }
 
 bool AsyncClient::free() {
-    if (_socket == -1)
+    if (!isOpen())
         return true;
+
     return (_conn_state == 0 || _conn_state > 4);
 }
 
@@ -1131,12 +803,12 @@ size_t AsyncClient::write(const char* data, size_t size, uint8_t apiflags) {
 }
 
 void AsyncClient::close(bool now) {
-    if (_socket != -1)
+    if (isOpen())
         _close();
 }
 
 int8_t AsyncClient::abort() {
-    if (_socket != -1) {
+    if (isOpen()) {
         // Note: needs LWIP_SO_LINGER to be enabled in order to work, otherwise
         // this call is equivalent to close().
         struct linger l;
@@ -1246,7 +918,7 @@ AsyncServer::AsyncServer(uint16_t port)
 }
 
 AsyncServer::~AsyncServer() {
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
+    // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
     end();
 }
 
@@ -1256,13 +928,8 @@ void AsyncServer::onClient(AcConnectHandler cb, void* arg) {
 }
 
 void AsyncServer::begin() {
-    if (_socket != -1)
+    if (isOpen())
         return;
-
-    if (!_start_asyncsock_task()) {
-        log_e("failed to start task");
-        return;
-    }
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
@@ -1287,18 +954,14 @@ void AsyncServer::begin() {
     fcntl(sockfd, F_SETFL, O_NONBLOCK);
 
     // Updating state visible to asyncTcpSock task
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
     _socket = sockfd;
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
 }
 
 void AsyncServer::end() {
-    if (_socket == -1)
+    if (!isOpen())
         return;
-    xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
-    ::close(_socket);
-    _socket = -1;
-    xSemaphoreGiveRecursive(_asyncsock_mutex);
+
+    ::close(_socket.exchange(-1));
 }
 
 void AsyncServer::_sockIsReadable() {
@@ -1324,7 +987,7 @@ void AsyncServer::_sockIsReadable() {
     }
 }
 
-bool AsyncServer::_sockIsWriteable()  {
+bool AsyncServer::_sockIsWriteable() {
     // dummy impl
     return false;
 }

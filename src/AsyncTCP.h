@@ -24,39 +24,24 @@
 #ifndef ASYNCTCP_H_
 #define ASYNCTCP_H_
 
-#include "IPAddress.h"
-#include "sdkconfig.h"
 #include <functional>
 #include <deque>
-#include <list>
+
+#include "IPAddress.h"
+
 #if ASYNC_TCP_SSL_ENABLED
 #include <ssl_client.h>
 #include "AsyncTCP_TLS_Context.h"
 #endif
+
+#include "SocketConnection.hpp"
 
 extern "C" {
     #include "lwip/err.h"
     #include "lwip/sockets.h"
 }
 
-//If core is not defined, then we are running in Arduino or PIO
-#ifndef CONFIG_ASYNC_TCP_RUNNING_CORE
-#define CONFIG_ASYNC_TCP_RUNNING_CORE -1 //any available core
-#define CONFIG_ASYNC_TCP_USE_WDT 1 //if enabled, adds between 33us and 200us per event
-#endif
-#ifndef CONFIG_ASYNC_TCP_STACK
-#define CONFIG_ASYNC_TCP_STACK 16384  // 8192 * 2
-#endif
-#ifndef CONFIG_ASYNC_TCP_TASK_PRIORITY
-#define CONFIG_ASYNC_TCP_TASK_PRIORITY 3
-#endif
-
 class AsyncClient;
-
-#define ASYNC_MAX_ACK_TIME 5000
-#define ASYNC_WRITE_FLAG_COPY 0x01 //will allocate new buffer to hold the data while sending (else will hold reference to the data given)
-#define ASYNC_WRITE_FLAG_MORE 0x02 //will not send PSH flag, meaning that there should be more data to be sent before the application should react.
-#define SSL_HANDSHAKE_TIMEOUT 5000 // timeout to complete SSL handshake
 
 typedef std::function<void(void*, AsyncClient*)> AcConnectHandler;
 typedef std::function<void(void*, AsyncClient*, size_t len, uint32_t time)> AcAckHandler;
@@ -65,62 +50,11 @@ typedef std::function<void(void*, AsyncClient*, void *data, size_t len)> AcDataH
 //typedef std::function<void(void*, AsyncClient*, struct pbuf *pb)> AcPacketHandler;
 typedef std::function<void(void*, AsyncClient*, uint32_t time)> AcTimeoutHandler;
 
-class AsyncSocketBase
-{
-private:
-    static std::list<AsyncSocketBase*>& _getSocketBaseList();
-
-protected:
-    int _socket = -1;
-    bool _selected = false;
-    bool _isdnsfinished = false;
-    uint32_t _sock_lastactivity = 0;
-
-    virtual void _sockIsReadable() = 0;     // Action to take on readable socket
-    virtual bool _sockIsWriteable() = 0;    // Action to take on writable socket
-    virtual void _sockPoll() = 0;           // Action to take on idle socket activity poll
-    virtual void _sockDelayedConnect() = 0; // Action to take on DNS-resolve finished
-
-    virtual bool _pendingWrite() = 0;  // Test if there is data pending to be written
-    virtual bool _isServer() = 0;      // Will a read from this socket result in one more client?
-
-public:
-    AsyncSocketBase();
-    virtual ~AsyncSocketBase();
-
-    friend void _asynctcpsock_task(void *);
-};
-
-class AsyncClient : public AsyncSocketBase
+class AsyncClient : public AsyncTcpSock::SocketConnection
 {
   public:
     AsyncClient(int sockfd = -1);
     ~AsyncClient();
-
-#if ASYNC_TCP_SSL_ENABLED
-    bool connect(IPAddress ip, uint16_t port, bool secure = false);
-    bool connect(const char* host, uint16_t port,  bool secure = false);
-    void setRootCa(const char* rootca, const size_t len);
-    void setClientCert(const char* cli_cert, const size_t len);
-    void setClientKey(const char* cli_key, const size_t len);
-    void setPsk(const char* psk_ident, const char* psk);
-#else
-    bool connect(IPAddress ip, uint16_t port);
-    bool connect(const char* host, uint16_t port);
-#endif // ASYNC_TCP_SSL_ENABLED
-    void close(bool now = false);
-
-    int8_t abort();
-    bool free();
-
-    bool canSend() { return space() > 0; }
-    size_t space();
-    size_t add(const char* data, size_t size, uint8_t apiflags=ASYNC_WRITE_FLAG_COPY);//add for sending
-    bool send();
-
-    //write equals add()+send()
-    size_t write(const char* data);
-    size_t write(const char* data, size_t size, uint8_t apiflags=ASYNC_WRITE_FLAG_COPY); //only when canSend() == true
 
     uint8_t state() { return _conn_state; }
     bool connected();
@@ -233,7 +167,7 @@ class AsyncClient : public AsyncSocketBase
     } notify_writebuf;
 
     // Queue of buffers to write to socket
-    SemaphoreHandle_t _write_mutex;
+    std::mutex writeMutex;
     std::deque<queued_writebuf> _writeQueue;
     bool _ack_timeout_signaled = false;
 
@@ -262,7 +196,7 @@ class AsyncClient : public AsyncSocketBase
 typedef std::function<int(void* arg, const char *filename, uint8_t **buf)> AcSSlFileHandler;
 #endif
 
-class AsyncServer : public AsyncSocketBase
+class AsyncServer : public AsyncTcpSock::SocketConnection
 {
   public:
     AsyncServer(IPAddress addr, uint16_t port);
