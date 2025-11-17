@@ -7,8 +7,11 @@
 #include <utility>
 
 #include <IPAddress.h>
+#include <lwip/err.h>
 
+#include "Callbacks.hpp"
 #include "SocketConnection.hpp"
+#include "WriteQueueBuffer.hpp"
 
 namespace AsyncTcpSock {
 
@@ -28,27 +31,35 @@ enum class ConnectionState : std::uint8_t {
 };
 
 class ClientBase : public SocketConnection {
+    static constexpr std::size_t INITIAL_WRITE_SPACE = TCP_SND_BUF;
+
+    Callbacks<ClientBase> _callbacks;  // TODO Replace with actual client argument
+
     ConnectionState _state = ConnectionState::DISCONNECTED;
+
+    std::mutex _writeMutex{};
+    std::size_t _writeSpaceRemaining = INITIAL_WRITE_SPACE;
+    std::vector<WriteQueueBuffer> _writeQueue{};
 
     IPAddress _ip{};
     std::uint16_t _port{};
 
     std::chrono::steady_clock::time_point _rx_last_packet{};
+    bool _ack_timeout_signaled = false;
 
   public:
     static void dnsFoundCallback(const char* name, const ip_addr_t* ip, void* arg);
 
     bool connect(IPAddress ip, std::uint16_t port);
     bool connect(const char* host, std::uint16_t port);
+
     void close(bool now = false);
+    err_enum_t abort();
 
-    int8_t abort();
-    bool free();
-
-    bool canSend() {
-        return space() > 0;
-    }
-    size_t space();
+    bool freeable() const;
+    bool connected() const;
+    bool canSend() const;
+    std::size_t space() const;
 
     /// Add the buffer to the send queue
     size_t add(const char* data,
@@ -63,6 +74,17 @@ class ClientBase : public SocketConnection {
                  size_t size,
                  ClientApiFlags apiflags = std::to_underlying(
                      ClientApiFlag::COPY));  // only when canSend() == true
+
+  protected:
+    virtual void _close();
+    virtual void _error(int errorCode);
+
+    virtual bool _processWriteQueue(std::unique_lock<std::mutex>& lock);
+    void _cleanupWriteQueue(std::unique_lock<std::mutex>& lock);
+    void _clearWriteQueue();
+
+    // SocketConnection
+    bool _sockIsWriteable() override;
 };
 
 }  // namespace AsyncTcpSock

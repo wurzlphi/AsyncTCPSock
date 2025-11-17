@@ -56,10 +56,6 @@ class AsyncClient : public AsyncTcpSock::SocketConnection
     AsyncClient(int sockfd = -1);
     ~AsyncClient();
 
-    uint8_t state() { return _conn_state; }
-    bool connected();
-    bool freeable();//disconnected or disconnecting
-
     uint32_t getAckTimeout();
     void setAckTimeout(uint32_t timeout);//no ACK timeout for the last sent packet in milliseconds
 
@@ -124,12 +120,6 @@ class AsyncClient : public AsyncTcpSock::SocketConnection
     uint32_t _rx_since_timeout;
     uint32_t _ack_timeout;
 
-    // Used on asynchronous DNS resolving scenario - I do not want to connect()
-    // from the LWIP thread itself.
-    struct ip_addr _connect_addr;
-    uint16_t _connect_port = 0;
-    //const char * _connect_dnsname = NULL;
-
 #if ASYNC_TCP_SSL_ENABLED
     size_t _root_ca_len;
     char* _root_ca;
@@ -174,22 +164,11 @@ class AsyncClient : public AsyncTcpSock::SocketConnection
     // Remaining space willing to queue for writing
     uint32_t _writeSpaceRemaining;
 
-    // Simulation of connection state
-    uint8_t _conn_state;
-
-    void _error(int8_t err);
-    void _close();
     void _removeAllCallbacks();
-    bool _flushWriteQueue();
-    void _clearWriteQueue();
-    void _collectNotifyWrittenBuffers(std::deque<notify_writebuf> &, int &);
-    void _notifyWrittenBuffers(std::deque<notify_writebuf> &, int);
-
+    
 #if ASYNC_TCP_SSL_ENABLED
     int _runSSLHandshakeLoop(void);
 #endif
-
-    friend void _tcpsock_dns_found(const char * name, struct ip_addr * ipaddr, void * arg);
 };
 
 #if ASYNC_TCP_SSL_ENABLED

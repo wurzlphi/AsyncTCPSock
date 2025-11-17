@@ -1,0 +1,77 @@
+#include "SslClient.hpp"
+
+using namespace AsyncTcpSock;
+
+void SslClient::_close() {
+    ClientBase::_close();
+
+#if ASYNC_TCP_SSL_ENABLED
+    if (_sslctx != NULL) {
+        delete _sslctx;
+        _sslctx = NULL;
+    }
+#endif
+}
+
+bool SslClient::_flushWriteQueue() {
+#if ASYNC_TCP_SSL_ENABLED
+    if (_sslctx != NULL) {
+        r = _sslctx->write(p, n);
+        if (ASYNCTCP_TLS_CAN_RETRY(r)) {
+            r = -1;
+            errno = EAGAIN;
+        } else if (ASYNCTCP_TLS_EOF(r)) {
+            r = -1;
+            errno = EPIPE;
+        } else if (r < 0) {
+            if (errno == 0)
+                errno = EIO;
+        }
+    } else {
+        r = lwip_write(_socket, p, n);
+    }
+#endif
+}
+
+bool SslClient::_sockIsWriteable() {
+#if ASYNC_TCP_SSL_ENABLED
+    if ((_conn_state == 2 || _conn_state == 3) && _secure) {
+        int res = 0;
+
+        if (_sslctx == NULL) {
+            String remIP_str = remoteIP().toString();
+            const char* host_or_ip =
+                _hostname.isEmpty() ? remIP_str.c_str() : _hostname.c_str();
+
+            _sslctx = new AsyncTCP_TLS_Context();
+            if (_root_ca != NULL) {
+                res = _sslctx->startSSLClient(
+                    _socket, host_or_ip, (const unsigned char*)_root_ca, _root_ca_len,
+                    (const unsigned char*)_cli_cert, _cli_cert_len,
+                    (const unsigned char*)_cli_key, _cli_key_len);
+            } else if (_psk_ident != NULL) {
+                res = _sslctx->startSSLClient(_socket, host_or_ip, _psk_ident, _psk);
+            } else {
+                res = _sslctx->startSSLClientInsecure(_socket, host_or_ip);
+            }
+
+            if (res != 0) {
+                // SSL setup for AsyncTCP does not inform SSL errors
+                log_e("TLS setup failed with error %d, closing socket...", res);
+                _close();
+                // _sslctx should be NULL after this
+            }
+        }
+
+        // _handshake_done is set to FALSE on connect() if encrypted
+        // connection
+        if (_sslctx != NULL && res == 0)
+            res = _runSSLHandshakeLoop();
+
+        if (!_handshake_done)
+            return ASYNCTCP_TLS_CAN_RETRY(res);
+
+        // Fallthrough to ordinary successful connection
+    }
+#endif
+}

@@ -33,7 +33,6 @@
 #include "Arduino.h"  // IWYU pragma: keep
 #include "lwip/sockets.h"
 
-
 #undef close
 #undef connect
 #undef write
@@ -179,22 +178,6 @@ void AsyncClient::onPoll(AcConnectHandler cb, void* arg) {
     _poll_cb_arg = arg;
 }
 
-bool AsyncClient::connected() {
-    if (!isOpen()) {
-        return false;
-    }
-
-    return _conn_state == 4;
-}
-
-bool AsyncClient::freeable() {
-    if (!isOpen()) {
-        return true;
-    }
-
-    return _conn_state == 0 || _conn_state > 4;
-}
-
 uint32_t AsyncClient::getRemoteAddress() {
     if (!isOpen()) {
         return 0;
@@ -263,8 +246,6 @@ uint16_t AsyncClient::localPort() {
     return getLocalPort();
 }
 
-
-
 // DNS resolving has finished. Check for error or connect
 void AsyncClient::_sockDelayedConnect() {
     if (_connect_addr.u_addr.ip4.addr) {
@@ -308,218 +289,6 @@ int AsyncClient::_runSSLHandshakeLoop() {
     return res;
 }
 #endif
-
-bool AsyncClient::_sockIsWriteable() {
-    int res;
-    int sockerr;
-    socklen_t len;
-    bool activity = false;
-
-    int sent_errno = 0;
-    std::deque<notify_writebuf> notifylist;
-
-    // Socket is now writeable. What should we do?
-    switch (_conn_state) {
-        case 2:
-        case 3:
-            // Socket has finished connecting. What happened?
-            len = (socklen_t)sizeof(int);
-            res = getsockopt(_socket, SOL_SOCKET, SO_ERROR, &sockerr, &len);
-            if (res < 0) {
-                _error(errno);
-            } else if (sockerr != 0) {
-                _error(sockerr);
-            } else {
-#if ASYNC_TCP_SSL_ENABLED
-                if (_secure) {
-                    int res = 0;
-
-                    if (_sslctx == NULL) {
-                        String remIP_str = remoteIP().toString();
-                        const char* host_or_ip =
-                            _hostname.isEmpty() ? remIP_str.c_str() : _hostname.c_str();
-
-                        _sslctx = new AsyncTCP_TLS_Context();
-                        if (_root_ca != NULL) {
-                            res = _sslctx->startSSLClient(
-                                _socket, host_or_ip, (const unsigned char*)_root_ca,
-                                _root_ca_len, (const unsigned char*)_cli_cert,
-                                _cli_cert_len, (const unsigned char*)_cli_key,
-                                _cli_key_len);
-                        } else if (_psk_ident != NULL) {
-                            res = _sslctx->startSSLClient(_socket, host_or_ip, _psk_ident,
-                                                          _psk);
-                        } else {
-                            res = _sslctx->startSSLClientInsecure(_socket, host_or_ip);
-                        }
-
-                        if (res != 0) {
-                            // SSL setup for AsyncTCP does not inform SSL errors
-                            log_e("TLS setup failed with error %d, closing socket...",
-                                  res);
-                            _close();
-                            // _sslctx should be NULL after this
-                        }
-                    }
-
-                    // _handshake_done is set to FALSE on connect() if encrypted
-                    // connection
-                    if (_sslctx != NULL && res == 0)
-                        res = _runSSLHandshakeLoop();
-
-                    if (!_handshake_done)
-                        return ASYNCTCP_TLS_CAN_RETRY(res);
-
-                    // Fallthrough to ordinary successful connection
-                }
-#endif
-
-                // Socket is now fully connected
-                _conn_state = 4;
-                activity = true;
-                _rx_last_packet = millis();
-                _ack_timeout_signaled = false;
-
-                if (_connect_cb) {
-                    _connect_cb(_connect_cb_arg, this);
-                }
-            }
-            break;
-        case 4:
-        default: {
-            // Socket can accept some new data...
-            {
-                std::lock_guard lock(writeMutex);
-                if (_writeQueue.size() > 0) {
-                    activity = _flushWriteQueue();
-                    _collectNotifyWrittenBuffers(notifylist, sent_errno);
-                }
-            }
-
-            _notifyWrittenBuffers(notifylist, sent_errno);
-            break;
-        }
-    }
-
-    return activity;
-}
-
-bool AsyncClient::_flushWriteQueue() {
-    bool activity = false;
-
-    if (!isOpen())
-        return false;
-
-    for (auto it = _writeQueue.begin(); it != _writeQueue.end(); it++) {
-        // Abort iteration if error found while writing a buffer
-        if (it->write_errno != 0)
-            break;
-
-        // Skip over head buffers already fully written
-        if (it->written >= it->length)
-            continue;
-
-        bool keep_writing = true;
-        do {
-            uint8_t* p = it->data + it->written;
-            size_t n = it->length - it->written;
-            errno = 0;
-            ssize_t r;
-
-#if ASYNC_TCP_SSL_ENABLED
-            if (_sslctx != NULL) {
-                r = _sslctx->write(p, n);
-                if (ASYNCTCP_TLS_CAN_RETRY(r)) {
-                    r = -1;
-                    errno = EAGAIN;
-                } else if (ASYNCTCP_TLS_EOF(r)) {
-                    r = -1;
-                    errno = EPIPE;
-                } else if (r < 0) {
-                    if (errno == 0)
-                        errno = EIO;
-                }
-            } else {
-#endif
-                r = lwip_write(_socket, p, n);
-#if ASYNC_TCP_SSL_ENABLED
-            }
-#endif
-
-            if (r >= 0) {
-                // Written some data into the socket
-                it->written += r;
-                _writeSpaceRemaining += r;
-                activity = true;
-
-                if (it->written >= it->length) {
-                    it->written_at = millis();
-                    if (it->owned)
-                        ::free(it->data);
-                    it->data = NULL;
-                }
-            } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Socket is full, could not write anything
-                keep_writing = false;
-                log_w("socket %d is full", _socket.load());
-            } else {
-                // A write error happened that should be reported
-                it->write_errno = errno;
-                keep_writing = false;
-                log_e("socket %d lwip_write() failed errno=%d", _socket.load(),
-                      it->write_errno);
-            }
-        } while (keep_writing && it->written < it->length);
-    }
-
-    return activity;
-}
-
-// This method MUST be called with _write_mutex held
-void AsyncClient::_collectNotifyWrittenBuffers(std::deque<notify_writebuf>& notifyqueue,
-                                               int& write_errno) {
-    write_errno = 0;
-    notifyqueue.clear();
-
-    while (_writeQueue.size() > 0) {
-        if (_writeQueue.front().write_errno != 0) {
-            write_errno = _writeQueue.front().write_errno;
-            return;
-        }
-
-        if (_writeQueue.front().written >= _writeQueue.front().length) {
-            // Collect information on fully-written buffer, and stash it into notify queue
-            if (_writeQueue.front().written_at > _rx_last_packet) {
-                _rx_last_packet = _writeQueue.front().written_at;
-            }
-            if (_writeQueue.front().owned && _writeQueue.front().data != NULL)
-                ::free(_writeQueue.front().data);
-
-            notify_writebuf noti;
-            noti.length = _writeQueue.front().length;
-            noti.delay = _writeQueue.front().written_at - _writeQueue.front().queued_at;
-            _writeQueue.pop_front();
-            notifyqueue.push_back(noti);
-        } else {
-            // Found first not-fully-written buffer, stop here
-            return;
-        }
-    }
-}
-
-void AsyncClient::_notifyWrittenBuffers(std::deque<notify_writebuf>& notifyqueue,
-                                        int write_errno) {
-    while (notifyqueue.size() > 0) {
-        if (notifyqueue.front().length > 0 && _sent_cb) {
-            _sent_cb(_sent_cb_arg, this, notifyqueue.front().length,
-                     notifyqueue.front().delay);
-        }
-        notifyqueue.pop_front();
-    }
-
-    if (write_errno != 0)
-        _error(write_errno);
-}
 
 void AsyncClient::_sockIsReadable() {
     _rx_last_packet = millis();
@@ -656,47 +425,6 @@ void AsyncClient::_removeAllCallbacks() {
     _poll_cb_arg = NULL;
 }
 
-void AsyncClient::_close() {
-    // Serial.print("AsyncClient::_close: "); Serial.println(_socket);
-    _conn_state = 0;
-    ::close(_socket.exchange(-1));
-
-#if ASYNC_TCP_SSL_ENABLED
-    if (_sslctx != NULL) {
-        delete _sslctx;
-        _sslctx = NULL;
-    }
-#endif
-
-    _clearWriteQueue();
-    if (_discard_cb)
-        _discard_cb(_discard_cb_arg, this);
-}
-
-void AsyncClient::_error(int8_t err) {
-    _conn_state = 0;
-    ::close(_socket.exchange(-1));
-
-#if ASYNC_TCP_SSL_ENABLED
-    if (_sslctx != NULL) {
-        delete _sslctx;
-        _sslctx = NULL;
-    }
-#endif
-
-    _clearWriteQueue();
-    if (_error_cb)
-        _error_cb(_error_cb_arg, this, err);
-    if (_discard_cb)
-        _discard_cb(_discard_cb_arg, this);
-}
-
-size_t AsyncClient::space() {
-    if (!connected())
-        return 0;
-    return _writeSpaceRemaining;
-}
-
 size_t AsyncClient::add(const char* data, size_t size, uint8_t apiflags) {
     queued_writebuf n_entry;
 
@@ -765,28 +493,6 @@ bool AsyncClient::_isServer() {
     return false;
 }
 
-// In normal operation this should be a no-op. Will only free something in case
-// of errors before all data was written.
-void AsyncClient::_clearWriteQueue() {
-    std::lock_guard lock(writeMutex);
-
-    while (_writeQueue.size() > 0) {
-        if (_writeQueue.front().owned) {
-            if (_writeQueue.front().data != NULL)
-                ::free(_writeQueue.front().data);
-        }
-        _writeQueue.pop_front();
-    }
-    _writeSpaceRemaining = TCP_SND_BUF;
-}
-
-bool AsyncClient::free() {
-    if (!isOpen())
-        return true;
-
-    return (_conn_state == 0 || _conn_state > 4);
-}
-
 size_t AsyncClient::write(const char* data) {
     if (data == NULL) {
         return 0;
@@ -800,24 +506,6 @@ size_t AsyncClient::write(const char* data, size_t size, uint8_t apiflags) {
         return 0;
     }
     return will_send;
-}
-
-void AsyncClient::close(bool now) {
-    if (isOpen())
-        _close();
-}
-
-int8_t AsyncClient::abort() {
-    if (isOpen()) {
-        // Note: needs LWIP_SO_LINGER to be enabled in order to work, otherwise
-        // this call is equivalent to close().
-        struct linger l;
-        l.l_onoff = 1;
-        l.l_linger = 0;
-        setsockopt(_socket, SOL_SOCKET, SO_LINGER, &l, sizeof(l));
-        _close();
-    }
-    return ERR_ABRT;
 }
 
 #if ASYNC_TCP_SSL_ENABLED
