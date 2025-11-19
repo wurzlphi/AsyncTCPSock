@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <type_traits>
 #include <utility>
 
 #include <esp32-hal-log.h>
@@ -11,6 +12,7 @@
 #include "Callbacks.hpp"
 #include "WriteQueueBuffer.hpp"
 #include "lwip/ip_addr.h"
+#include "lwip/sockets.h"
 
 #ifdef EINPROGRESS
 #if EINPROGRESS != 119
@@ -201,6 +203,8 @@ void ClientBase::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) {
     // Assume that _writeMutex is locked.
 
     std::vector<WriteStats> notifyQueue;
+    notifyQueue.reserve(_writeQueue.size());
+
     // Check front of queue for finished buffers and collect some stats about them.
     std::size_t toRemove = 0;
     for (const auto& buf : _writeQueue) {
@@ -246,6 +250,65 @@ void ClientBase::_clearWriteQueue() {
     _writeSpaceRemaining = INITIAL_WRITE_SPACE;
 }
 
+bool ClientBase::_checkAckTimeout() {
+    if (_ack_timeout_signaled || !_ack_timeout)
+        // Handler already called or no timeout set, continue normally.
+        return false;
+
+    std::unique_lock lock(_writeMutex);
+
+    if (!_writeQueue.empty()) {
+        // Check the first element in the queue to see how long it's been waiting to be sent.
+
+        const auto& first = WriteQueueBufferUtil::asCommonView(_writeQueue.front());
+        auto delay = std::chrono::steady_clock::now() - first.queuedAt;
+
+        if (delay >= *_ack_timeout &&
+            first.writtenAt == std::chrono::steady_clock::time_point{}) {
+            // ACK timed out and nothing was ever written
+            _ack_timeout_signaled = true;
+
+            lock.unlock();
+            _callbacks.invoke(CallbackType::TIMEOUT, delay);
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool ClientBase::_checkRxTimeout() {
+    if (!_rx_timeout)
+        return false;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now - _rx_last_packet < _rx_timeout)
+        return false;
+
+    {
+        // Check if this socket can even be read. It may be the case that the select(...)
+        // call in the manager task fails because any of the sockets is not readable or
+        // writable, but we only want to time out if we are the problematic socket.
+
+        fd_set sockSet_r{};
+        timeval timeout{};
+        FD_ZERO(&sockSet_r);
+        FD_SET(_socket, &sockSet_r);
+
+        int selected = select(_socket + 1, &sockSet_r, nullptr, nullptr, &timeout);
+        if (selected > 0) {
+            // This socket is still readable. Reset timeout.
+            _rx_last_packet = now;
+            return false;
+        }
+    }
+
+    // This connection has timed out and the socket is no longer readable. The connection
+    // should be closed shortly and be disposed of.
+    return true;
+}
+
 bool ClientBase::_sockIsWriteable() {
     bool activity = false;
 
@@ -283,4 +346,61 @@ bool ClientBase::_sockIsWriteable() {
     }
 
     return activity;
+}
+
+void ClientBase::_sockIsReadable() {
+    errno = 0;
+
+    ssize_t result =
+        lwip_read(_socket, SHARED_READ_BUFFER.data(), SHARED_READ_BUFFER.size());
+
+    if (result > 0) {
+        _rx_last_packet = std::chrono::steady_clock::now();
+        // result contains the amount of data read
+        _callbacks.invoke(CallbackType::RECV, SHARED_READ_BUFFER.data(), result);
+    } else if (result == 0) {
+        // A successful read of 0 bytes indicates that the remote side closed the
+        // connection
+        _close();
+    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        // Errors other than these should be handled
+        _error(errno);
+    }
+}
+
+void ClientBase::_sockDelayedConnect() {
+    if (_ip) {
+        connect(_ip, _port);
+    } else {
+        _error(ERR_DNS_RESOLUTION_FAILED);
+    }
+}
+
+void ClientBase::_sockPoll() {
+    if (!connected())
+        return;
+
+    {
+        // send() may be invoked from threads other than the manager task, causing the
+        // write queue to be processed without notifications being sent. Do this now.
+        std::unique_lock lock(_writeMutex);
+        _cleanupWriteQueue(lock);
+    }
+
+    // Processing notifications may have disconnected us
+    if (!connected())
+        return;
+
+    if (_checkAckTimeout()) {
+        // An ACK timeout will not yet close the connection
+        return;
+    }
+
+    if (_checkRxTimeout()) {
+        // A receive timeout will close the connection if the socket is no more readable
+        _close();
+        return;
+    }
+
+    _callbacks.invoke(CallbackType::POLL);
 }

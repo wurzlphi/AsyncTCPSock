@@ -1,10 +1,12 @@
 #ifndef ASYNCTCPSOCK_CLIENTBASE_HPP
 #define ASYNCTCPSOCK_CLIENTBASE_HPP
 
+#include <array>
 #include <bitset>
 #include <chrono>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include <IPAddress.h>
 #include <lwip/err.h>
@@ -31,7 +33,12 @@ enum class ConnectionState : std::uint8_t {
 };
 
 class ClientBase : public SocketConnection {
+    static constexpr int ERR_DNS_RESOLUTION_FAILED = -55;
     static constexpr std::size_t INITIAL_WRITE_SPACE = TCP_SND_BUF;
+
+    // This buffer can be shared for all clients since reading is performed sequentially
+    // by the manager task.
+    static inline std::array<std::uint8_t, TCP_MSS> SHARED_READ_BUFFER{};
 
     Callbacks<ClientBase> _callbacks;  // TODO Replace with actual client argument
 
@@ -39,11 +46,15 @@ class ClientBase : public SocketConnection {
 
     std::mutex _writeMutex{};
     std::size_t _writeSpaceRemaining = INITIAL_WRITE_SPACE;
+    // vector is as fast as deque in my benchmarks and actually performs slightly better
+    // for smaller queue sizes
     std::vector<WriteQueueBuffer> _writeQueue{};
 
     IPAddress _ip{};
     std::uint16_t _port{};
 
+    std::optional<std::chrono::steady_clock::duration> _ack_timeout = std::nullopt;
+    std::optional<std::chrono::steady_clock::duration> _rx_timeout = std::nullopt;
     std::chrono::steady_clock::time_point _rx_last_packet{};
     bool _ack_timeout_signaled = false;
 
@@ -79,12 +90,19 @@ class ClientBase : public SocketConnection {
     virtual void _close();
     virtual void _error(int errorCode);
 
-    virtual bool _processWriteQueue(std::unique_lock<std::mutex>& lock);
-    void _cleanupWriteQueue(std::unique_lock<std::mutex>& lock);
+    virtual bool _processWriteQueue(std::unique_lock<std::mutex>& writeQueueLock);
+    void _cleanupWriteQueue(std::unique_lock<std::mutex>& writeQueueLock);
     void _clearWriteQueue();
+
+    bool _checkAckTimeout();
+    bool _checkRxTimeout();
 
     // SocketConnection
     bool _sockIsWriteable() override;
+    void _sockIsReadable() override;
+
+    void _sockDelayedConnect() override;
+    void _sockPoll() override;
 };
 
 }  // namespace AsyncTcpSock

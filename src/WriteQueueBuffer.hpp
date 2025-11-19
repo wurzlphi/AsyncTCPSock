@@ -87,6 +87,11 @@ inline std::size_t write(WriteQueueBuffer& buf, int socket) {
         buf);
 }
 
+inline const CommonWriteQueueBuffer& asCommonView(const WriteQueueBuffer& buf) {
+    return std::visit([](const auto& it) -> const CommonWriteQueueBuffer& { return it; },
+                      buf);
+}
+
 }  // namespace WriteQueueBufferUtil
 
 }  // namespace AsyncTcpSock

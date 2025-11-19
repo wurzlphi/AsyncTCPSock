@@ -246,25 +246,6 @@ uint16_t AsyncClient::localPort() {
     return getLocalPort();
 }
 
-// DNS resolving has finished. Check for error or connect
-void AsyncClient::_sockDelayedConnect() {
-    if (_connect_addr.u_addr.ip4.addr) {
-#if ASYNC_TCP_SSL_ENABLED
-        connect(IPAddress(_connect_addr.u_addr.ip4.addr), _connect_port, _secure);
-#else
-        connect(IPAddress(_connect_addr.u_addr.ip4.addr), _connect_port);
-#endif
-    } else {
-        _conn_state = 0;
-        if (_error_cb) {
-            _error_cb(_error_cb_arg, this, -55);
-        }
-        if (_discard_cb) {
-            _discard_cb(_discard_cb_arg, this);
-        }
-    }
-}
-
 #if ASYNC_TCP_SSL_ENABLED
 int AsyncClient::_runSSLHandshakeLoop() {
     int res = 0;
@@ -289,57 +270,6 @@ int AsyncClient::_runSSLHandshakeLoop() {
     return res;
 }
 #endif
-
-void AsyncClient::_sockIsReadable() {
-    _rx_last_packet = millis();
-    errno = 0;
-    ssize_t r;
-
-#if ASYNC_TCP_SSL_ENABLED
-    if (_sslctx != NULL) {
-        if (!_handshake_done) {
-            // Handshake process has stopped for want of data, must be
-            // continued here for connection to complete.
-            _runSSLHandshakeLoop();
-
-            // If handshake was successful, this will be recognized when the socket
-            // next becomes writable. No other read operation should be done here.
-            return;
-        } else {
-            r = _sslctx->read(_readBuffer, MAX_PAYLOAD_SIZE);
-            if (ASYNCTCP_TLS_CAN_RETRY(r)) {
-                r = -1;
-                errno = EAGAIN;
-            } else if (ASYNCTCP_TLS_EOF(r)) {
-                // Simulate "successful" end-of-stream condition
-                r = 0;
-            } else if (r < 0) {
-                if (errno == 0)
-                    errno = EIO;
-            }
-        }
-    } else {
-#endif
-        r = lwip_read(_socket, _readBuffer, MAX_PAYLOAD_SIZE);
-#if ASYNC_TCP_SSL_ENABLED
-    }
-#endif
-
-    if (r > 0) {
-        if (_recv_cb) {
-            _recv_cb(_recv_cb_arg, this, _readBuffer, r);
-        }
-    } else if (r == 0) {
-        // A successful read of 0 bytes indicates remote side closed connection
-        _close();
-    } else if (r < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // Do nothing, will try later
-        } else {
-            _error(errno);
-        }
-    }
-}
 
 void AsyncClient::_sockPoll() {
     if (!connected())

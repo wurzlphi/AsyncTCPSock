@@ -21,6 +21,7 @@ class SslClient : public ClientBase {
 
   // SocketConnection
   bool _sockIsWriteable() override;
+  void _sockIsReadable() override;
 };
 
 }  // namespace AsyncTcpSock

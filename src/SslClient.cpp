@@ -75,3 +75,33 @@ bool SslClient::_sockIsWriteable() {
     }
 #endif
 }
+
+void SslClient::_sockIsReadable() {
+#if ASYNC_TCP_SSL_ENABLED
+    if (_sslctx != NULL) {
+        if (!_handshake_done) {
+            // Handshake process has stopped for want of data, must be
+            // continued here for connection to complete.
+            _runSSLHandshakeLoop();
+
+            // If handshake was successful, this will be recognized when the socket
+            // next becomes writable. No other read operation should be done here.
+            return;
+        } else {
+            r = _sslctx->read(_readBuffer, MAX_PAYLOAD_SIZE);
+            if (ASYNCTCP_TLS_CAN_RETRY(r)) {
+                r = -1;
+                errno = EAGAIN;
+            } else if (ASYNCTCP_TLS_EOF(r)) {
+                // Simulate "successful" end-of-stream condition
+                r = 0;
+            } else if (r < 0) {
+                if (errno == 0)
+                    errno = EIO;
+            }
+        }
+    } else {
+        r = lwip_read(_socket, _readBuffer, MAX_PAYLOAD_SIZE);
+    }
+#endif
+}

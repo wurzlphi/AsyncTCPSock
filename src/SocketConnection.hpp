@@ -20,7 +20,7 @@ namespace AsyncTcpSock {
  * Formerly AsyncSocketBase
  */
 struct SocketConnection {
-  friend class SocketConnectionManager;
+    friend class SocketConnectionManager;
 
   protected:
     std::atomic<int> _socket = -1;
@@ -45,14 +45,19 @@ struct SocketConnection {
         _sock_lastactivity = std::move(when);
     }
 
-    virtual void _sockIsReadable() = 0;   // Action to take on readable socket
-    virtual bool _sockIsWriteable() = 0;  // Action to take on writable socket
-    virtual void _sockPoll() = 0;         // Action to take on idle socket activity poll
-    virtual void _sockDelayedConnect() = 0;  // Action to take on DNS-resolve finished
+    // Action to take on a writable socket
+    virtual bool _sockIsWriteable() = 0;
+    // Action to take on a readable socket
+    virtual void _sockIsReadable() = 0;
+    // Action to take when DNS-resolution is finished
+    virtual void _sockDelayedConnect() = 0;
+    // Action to take for an idle socket when the polling timer runs out
+    virtual void _sockPoll() = 0;
 
-    virtual bool _pendingWrite() = 0;  // Test if there is data pending to be written
-    virtual bool
-    _isServer() = 0;  // Will a read from this socket result in one more client?
+    // Test if there is data pending to be written
+    virtual bool _pendingWrite() = 0;
+    // Will a read from this socket result in one more client?
+    virtual bool _isServer() = 0;
 };
 
 class SocketConnectionManager {
