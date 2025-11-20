@@ -1,18 +1,22 @@
+#ifndef ASYNCTCPSOCK_CLIENTBASE_TPP
+#define ASYNCTCPSOCK_CLIENTBASE_TPP
+
 #include "ClientBase.hpp"
+
+//
 
 #include <cerrno>
 #include <chrono>
-#include <type_traits>
+#include <cstring>
 #include <utility>
 
 #include <esp32-hal-log.h>
 #include <lwip/dns.h>
+#include <lwip/ip_addr.h>
 #include <lwip/sockets.h>
 
 #include "Callbacks.hpp"
 #include "WriteQueueBuffer.hpp"
-#include "lwip/ip_addr.h"
-#include "lwip/sockets.h"
 
 #ifdef EINPROGRESS
 #if EINPROGRESS != 119
@@ -23,7 +27,8 @@
 using namespace AsyncTcpSock;
 
 // This function runs in the LWIP thread
-void ClientBase::dnsFoundCallback(const char* _, const ip_addr_t* ip, void* arg) {
+template <class Client>
+void ClientBase<Client>::dnsFoundCallback(const char* _, const ip_addr_t* ip, void* arg) {
     ClientBase* c = static_cast<ClientBase*>(arg);
 
     if (ip) {
@@ -37,24 +42,37 @@ void ClientBase::dnsFoundCallback(const char* _, const ip_addr_t* ip, void* arg)
     // TODO: actually use name
 }
 
-bool ClientBase::connect(IPAddress ip, std::uint16_t port) {
+template <class Client>
+ClientBase<Client>::ClientBase()
+    : SocketConnection(false) {
+}
+
+template <class Client>
+ClientBase<Client>::ClientBase(int socket)
+    : SocketConnection(socket, false) {
+    if (_socket > 0) {
+        _state = ConnectionState::CONNECTED;
+        _rx_last_packet = std::chrono::steady_clock::now();
+    }
+}
+
+template <class Client>
+ClientBase<Client>::~ClientBase() {
+    close();
+}
+
+template <class Client>
+bool ClientBase<Client>::connect(IPAddress ip, std::uint16_t port) {
     if (isOpen()) {
         log_w("already connected, state %d", std::to_underlying(_state));
         return false;
     }
 
-#if ASYNC_TCP_SSL_ENABLED
-    _secure = secure;
-    _handshake_done = !secure;
-#endif  // ASYNC_TCP_SSL_ENABLED
-
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        log_e("socket: %d", errno);
+    int socket = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (socket < 0) {
+        log_e("socket() error: %d", errno);
         return false;
     }
-
-    int r = fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK);
 
     sockaddr serveraddr = std::bit_cast<sockaddr>(sockaddr_in{.sin_len = 0,
                                                               .sin_family = AF_INET,
@@ -64,12 +82,12 @@ bool ClientBase::connect(IPAddress ip, std::uint16_t port) {
 
     // Serial.printf("DEBUG: connect to %08x port %d using IP... ", ip_addr, port);
     errno = 0;
-    r = ::connect(sockfd, &serveraddr, sizeof(serveraddr));
+    int result = ::connect(socket, &serveraddr, sizeof(serveraddr));
     // Serial.printf("r=%d errno=%d\r\n", r, errno);
-    if (r < 0 && errno != EINPROGRESS) {
+    if (result < 0 && errno != EINPROGRESS) {
         // Serial.println("\t(connect failed)");
-        log_e("connect on fd %d, errno: %d, \"%s\"", sockfd, errno, strerror(errno));
-        ::close(sockfd);
+        log_e("connect on fd %d, errno: %d, \"%s\"", socket, errno, strerror(errno));
+        ::close(socket);
         return false;
     }
 
@@ -77,14 +95,15 @@ bool ClientBase::connect(IPAddress ip, std::uint16_t port) {
     _port = port;
 
     // Updating state visible to asyncTcpSock task
-    _socket = sockfd;
+    _setSocket(socket);
 
     // Socket is now connecting. Should become writable in asyncTcpSock task, which then
     // updates the state in _sockIsWritable().
     return true;
 }
 
-bool ClientBase::connect(const char* host, std::uint16_t port) {
+template <class Client>
+bool ClientBase<Client>::connect(const char* host, std::uint16_t port) {
     log_v("connect to %s port %d using DNS...", host, port);
 
     ip_addr_t addr;
@@ -94,23 +113,12 @@ bool ClientBase::connect(const char* host, std::uint16_t port) {
         IPAddress resolved(&addr);
         log_v("\taddr resolved as %s, connecting...", resolved.toString().c_str());
 
-#if ASYNC_TCP_SSL_ENABLED
-        _hostname = host;
-        return connect(IPAddress(addr.u_addr.ip4.addr), port, secure);
-#else
         return connect(std::move(resolved), port);
-#endif  // ASYNC_TCP_SSL_ENABLED
 
     } else if (err == ERR_INPROGRESS) {
         log_v("\twaiting for DNS resolution");
         _state = ConnectionState::WAITING_FOR_DNS;
         _port = port;
-
-#if ASYNC_TCP_SSL_ENABLED
-        _hostname = host;
-        _secure = secure;
-        _handshake_done = !secure;
-#endif  // ASYNC_TCP_SSL_ENABLED
 
         return true;
     }
@@ -119,12 +127,14 @@ bool ClientBase::connect(const char* host, std::uint16_t port) {
     return false;
 }
 
-void ClientBase::close(bool _) {
+template <class Client>
+void ClientBase<Client>::close(bool _) {
     if (isOpen())
         _close();
 }
 
-err_enum_t ClientBase::abort() {
+template <class Client>
+err_enum_t ClientBase<Client>::abort() {
     if (isOpen()) {
         // Note: needs LWIP_SO_LINGER to be enabled in order to work, otherwise
         // this call is equivalent to close().
@@ -137,7 +147,8 @@ err_enum_t ClientBase::abort() {
     return ERR_ABRT;
 }
 
-bool ClientBase::freeable() const {
+template <class Client>
+bool ClientBase<Client>::freeable() const {
     if (!isOpen()) {
         return true;
     }
@@ -145,22 +156,124 @@ bool ClientBase::freeable() const {
     return _state == ConnectionState::DISCONNECTED;
 }
 
-bool ClientBase::connected() const {
+template <class Client>
+bool ClientBase<Client>::connected() const {
     return _state == ConnectionState::CONNECTED;
 }
 
-bool ClientBase::canSend() const {
+template <class Client>
+bool ClientBase<Client>::canSend() const {
     return space() > 0;
 }
 
-std::size_t ClientBase::space() const {
+template <class Client>
+std::size_t ClientBase<Client>::space() const {
     if (!connected())
         return 0;
 
     return _writeSpaceRemaining;
 }
 
-void ClientBase::_close() {
+template <class Client>
+std::size_t ClientBase<Client>::add(std::span<const std::uint8_t> data,
+                                    ClientApiFlags apiflags) {
+    return add(data.data(), data.size(), apiflags);
+}
+
+template <class Client>
+std::size_t ClientBase<Client>::add(const std::uint8_t* data,
+                                    std::size_t size,
+                                    ClientApiFlags apiFlags) {
+    if (!connected() || data == nullptr || size == 0)
+        return 0;
+
+    const std::size_t remainingSpace = space();
+    if (remainingSpace == 0)
+        return 0;
+
+    const std::size_t toSend = std::min(remainingSpace, size);
+    WriteQueueBuffer buf;
+    if (apiFlags.test(std::to_underlying(ClientApiFlag::COPY))) {
+        buf.emplace<OwnedWriteQueueBuffer>(OwnedWriteQueueBuffer{
+            {.queuedAt = std::chrono::steady_clock::now()},
+            std::vector<std::uint8_t>(data, data + toSend),
+        });
+    } else {
+        buf.emplace<BorrowedWriteQueueBuffer>(BorrowedWriteQueueBuffer{
+            {.queuedAt = std::chrono::steady_clock::now()},
+            std::span<const std::uint8_t>(data, toSend),
+        });
+    }
+
+    {
+        std::lock_guard lock(_writeMutex);
+        _writeQueue.push_back(std::move(buf));
+        _writeSpaceRemaining -= toSend;
+        _ack_timeout_signaled = false;
+    }
+
+    return toSend;
+}
+
+template <class Client>
+bool ClientBase<Client>::send() {
+    if (!connected())
+        return false;
+
+    fd_set sockSet_w{};
+    FD_ZERO(&sockSet_w);
+    FD_SET(_socket, &sockSet_w);
+    timeval tv{.tv_sec = 0, .tv_usec = 0};
+
+    int ready = select(_socket + 1, nullptr, &sockSet_w, nullptr, &tv);
+    if (ready > 0) {
+        return _sockIsWriteable();
+    }
+
+    return false;
+}
+
+template <class Client>
+std::size_t ClientBase<Client>::write(const char* str) {
+    if (str == nullptr)
+        return 0;
+
+    return write(reinterpret_cast<const std::uint8_t*>(str), std::strlen(str));
+}
+
+template <class Client>
+std::size_t ClientBase<Client>::write(const std::uint8_t* bytes,
+                                      std::size_t size,
+                                      ClientApiFlags apiFlags) {
+    std::size_t toSend = add(bytes, size, apiFlags);
+
+    if (toSend == 0) {
+        // Nothing to send => nothing was written
+        return 0;
+    }
+
+    if (!send()) {
+        // Sending failed => nothing was written
+        return 0;
+    }
+
+    return toSend;
+}
+
+template <class Client>
+void ClientBase<Client>::setAckTimeout(
+    std::optional<std::chrono::steady_clock::duration> timeout) {
+    _ack_timeout = timeout;
+}
+
+template <class Client>
+void ClientBase<Client>::setRxTimeout(
+    std::optional<std::chrono::steady_clock::duration> timeout) {
+    _rx_timeout = timeout;
+}
+
+template <class Client>
+void ClientBase<Client>::_close() {
     _state = ConnectionState::DISCONNECTED;
     ::close(_socket.exchange(-1));
 
@@ -169,13 +282,15 @@ void ClientBase::_close() {
     _callbacks.invoke(CallbackType::DISCONNECT);
 }
 
-void ClientBase::_error(int errorCode) {
+template <class Client>
+void ClientBase<Client>::_error(int errorCode) {
     _close();
     // TODO: Callback order switched wrt original impl. Issue?
     _callbacks.invoke(CallbackType::ERROR, errorCode);
 }
 
-bool ClientBase::_processWriteQueue(std::unique_lock<std::mutex>&) {
+template <class Client>
+bool ClientBase<Client>::_processWriteQueue(std::unique_lock<std::mutex>&) {
     // Assume we can write to the socket, calling this otherwise makes no sense.
     // Also assume, that _writeMutex is locked.
 
@@ -199,7 +314,8 @@ bool ClientBase::_processWriteQueue(std::unique_lock<std::mutex>&) {
     return activity;
 }
 
-void ClientBase::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) {
+template <class Client>
+void ClientBase<Client>::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) {
     // Assume that _writeMutex is locked.
 
     std::vector<WriteStats> notifyQueue;
@@ -244,13 +360,15 @@ void ClientBase::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) {
     }
 }
 
-void ClientBase::_clearWriteQueue() {
+template <class Client>
+void ClientBase<Client>::_clearWriteQueue() {
     std::lock_guard lock(_writeMutex);
     _writeQueue.clear();
     _writeSpaceRemaining = INITIAL_WRITE_SPACE;
 }
 
-bool ClientBase::_checkAckTimeout() {
+template <class Client>
+bool ClientBase<Client>::_checkAckTimeout() {
     if (_ack_timeout_signaled || !_ack_timeout)
         // Handler already called or no timeout set, continue normally.
         return false;
@@ -258,7 +376,8 @@ bool ClientBase::_checkAckTimeout() {
     std::unique_lock lock(_writeMutex);
 
     if (!_writeQueue.empty()) {
-        // Check the first element in the queue to see how long it's been waiting to be sent.
+        // Check the first element in the queue to see how long it's been waiting to be
+        // sent.
 
         const auto& first = WriteQueueBufferUtil::asCommonView(_writeQueue.front());
         auto delay = std::chrono::steady_clock::now() - first.queuedAt;
@@ -278,7 +397,8 @@ bool ClientBase::_checkAckTimeout() {
     return false;
 }
 
-bool ClientBase::_checkRxTimeout() {
+template <class Client>
+bool ClientBase<Client>::_checkRxTimeout() {
     if (!_rx_timeout)
         return false;
 
@@ -309,7 +429,20 @@ bool ClientBase::_checkRxTimeout() {
     return true;
 }
 
-bool ClientBase::_sockIsWriteable() {
+template <class Client>
+bool ClientBase<Client>::_pendingWrite() {
+    // Mark this socket as eligible for write polling if it is not fully connected yet or
+    // if there is something in the queue, regardless of connection state.
+    return (_state != ConnectionState::DISCONNECTED &&
+            _state != ConnectionState::CONNECTED) ||
+           [&]() {
+               std::lock_guard lock(_writeMutex);
+               return !_writeQueue.empty();
+           }();
+}
+
+template <class Client>
+bool ClientBase<Client>::_sockIsWriteable() {
     bool activity = false;
 
     // Socket is now writeable. What should we do?
@@ -348,7 +481,8 @@ bool ClientBase::_sockIsWriteable() {
     return activity;
 }
 
-void ClientBase::_sockIsReadable() {
+template <class Client>
+void ClientBase<Client>::_sockIsReadable() {
     errno = 0;
 
     ssize_t result =
@@ -368,7 +502,8 @@ void ClientBase::_sockIsReadable() {
     }
 }
 
-void ClientBase::_sockDelayedConnect() {
+template <class Client>
+void ClientBase<Client>::_sockDelayedConnect() {
     if (_ip) {
         connect(_ip, _port);
     } else {
@@ -376,7 +511,8 @@ void ClientBase::_sockDelayedConnect() {
     }
 }
 
-void ClientBase::_sockPoll() {
+template <class Client>
+void ClientBase<Client>::_sockPoll() {
     if (!connected())
         return;
 
@@ -404,3 +540,5 @@ void ClientBase::_sockPoll() {
 
     _callbacks.invoke(CallbackType::POLL);
 }
+
+#endif

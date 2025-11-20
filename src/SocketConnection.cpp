@@ -4,11 +4,11 @@
 #include <mutex>
 #include <stdexcept>
 
-#include "esp32-hal-log.h"
-#include "esp32-hal.h"
-#include "esp_task_wdt.h"
-#include "freertos/projdefs.h"
-#include "sdkconfig.h"
+#include <esp32-hal-log.h>
+#include <esp32-hal.h>
+#include <esp_task_wdt.h>
+#include <lwip/sockets.h>
+#include <sdkconfig.h>
 
 using namespace AsyncTcpSock;
 
@@ -28,9 +28,18 @@ static void leave_wdt() {
 #endif
 }
 
-SocketConnection::SocketConnection() {
+//
+// SocketConnection
+//
+SocketConnection::SocketConnection(bool isServer)
+    : _isServer(isServer) {
     // Add this base socket to the monitored list
     SocketConnectionManager::instance().addConnection(this);
+}
+
+SocketConnection::SocketConnection(int socket, bool isServer)
+    : SocketConnection(isServer) {
+    _setSocket(socket);
 }
 
 SocketConnection::~SocketConnection() {
@@ -38,6 +47,51 @@ SocketConnection::~SocketConnection() {
     SocketConnectionManager::instance().removeConnection(this);
 }
 
+bool SocketConnection::isOpen() const {
+    return _socket != -1;
+}
+
+std::chrono::steady_clock::time_point SocketConnection::getLastActive() const {
+    return _sock_lastactivity;
+}
+
+void SocketConnection::setLastActive(std::chrono::steady_clock::time_point when) {
+    _sock_lastactivity = when;
+}
+
+void SocketConnection::setNoDelay(bool nodelay) {
+    if (!isOpen())
+        return;
+
+    int res = setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(bool));
+    if (res < 0) {
+        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
+    }
+}
+
+bool SocketConnection::getNoDelay() {
+    if (!isOpen())
+        // Nagle's algorithm is enabled by default
+        return false;
+
+    bool nodelay = false;
+    socklen_t size = sizeof(bool);
+    int res = getsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, &size);
+    if (res < 0) {
+        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
+    }
+
+    return nodelay;
+}
+
+void SocketConnection::_setSocket(int socket) {
+    fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
+    _socket = socket;
+}
+
+//
+// SocketConnectionManager
+//
 SocketConnectionManager& SocketConnectionManager::instance() {
     static SocketConnectionManager manager;
     return manager;
@@ -69,7 +123,7 @@ void SocketConnectionManager::updateConnectionStates(void*) {
 
             if (socket != -1) {
 #ifdef CONFIG_LWIP_MAX_SOCKETS
-                if (!it->_isServer() || manager.hasFreeSocket()) {
+                if (!it->_isServer || manager.hasFreeSocket()) {
 #endif
                     FD_SET(socket, &sockSet_r);
                     max_sock = std::max(max_sock, socket + 1);

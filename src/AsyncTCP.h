@@ -56,14 +56,6 @@ class AsyncClient : public AsyncTcpSock::SocketConnection
     AsyncClient(int sockfd = -1);
     ~AsyncClient();
 
-    uint32_t getAckTimeout();
-    void setAckTimeout(uint32_t timeout);//no ACK timeout for the last sent packet in milliseconds
-
-    uint32_t getRxTimeout();
-    void setRxTimeout(uint32_t timeout);//no RX data timeout for the connection in seconds
-    void setNoDelay(bool nodelay);
-    bool getNoDelay();
-
     uint32_t getRemoteAddress();
     uint16_t getRemotePort();
     uint32_t getLocalAddress();
@@ -89,15 +81,6 @@ class AsyncClient : public AsyncTcpSock::SocketConnection
 
     const char * errorToString(int8_t error);
 //    const char * stateToString();
-
-  protected:
-    void _sockIsReadable() override;
-    bool _sockIsWriteable() override;
-    void _sockPoll() override;
-    void _sockDelayedConnect() override;
-
-    bool _pendingWrite() override;
-    bool _isServer() override;
 
   private:
 
@@ -209,7 +192,6 @@ class AsyncServer : public AsyncTcpSock::SocketConnection
     void _sockDelayedConnect() override;
 
     bool _pendingWrite() override;
-    bool _isServer() override;
 };
 
 

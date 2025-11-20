@@ -24,7 +24,7 @@ struct CommonWriteQueueBuffer {
 };
 
 struct BorrowedWriteQueueBuffer : public CommonWriteQueueBuffer {
-    std::span<std::uint8_t> data{};
+    std::span<const std::uint8_t> data{};
 };
 
 struct OwnedWriteQueueBuffer : public CommonWriteQueueBuffer {

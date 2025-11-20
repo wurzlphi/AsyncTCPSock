@@ -28,23 +28,32 @@ struct SocketConnection {
     std::chrono::steady_clock::time_point _sock_lastactivity =
         std::chrono::steady_clock::now();
 
+  private:
+    bool _isServer = false;
+
   public:
-    SocketConnection();
+    SocketConnection(bool isServer);
+    SocketConnection(int socket, bool isServer);
+
+    SocketConnection(const SocketConnection& other) = delete;
+    SocketConnection(SocketConnection&& other) = delete;
+
+    SocketConnection& operator=(const SocketConnection& other) = delete;
+    SocketConnection& operator=(SocketConnection&& other) = delete;
+
     virtual ~SocketConnection();
 
-    inline bool isOpen() const {
-        return _socket != -1;
-    }
+    bool isOpen() const;
 
-    inline std::chrono::steady_clock::time_point getLastActive() const {
-        return _sock_lastactivity;
-    }
+    std::chrono::steady_clock::time_point getLastActive() const;
+    void setLastActive(
+        std::chrono::steady_clock::time_point when = std::chrono::steady_clock::now());
 
-    inline void setLastActive(
-        std::chrono::steady_clock::time_point when = std::chrono::steady_clock::now()) {
-        _sock_lastactivity = std::move(when);
-    }
+    // If true, disables Nagle's algorithm (TCP_NODELAY)
+    void setNoDelay(bool nodelay);
+    bool getNoDelay();
 
+  protected:
     // Action to take on a writable socket
     virtual bool _sockIsWriteable() = 0;
     // Action to take on a readable socket
@@ -56,8 +65,8 @@ struct SocketConnection {
 
     // Test if there is data pending to be written
     virtual bool _pendingWrite() = 0;
-    // Will a read from this socket result in one more client?
-    virtual bool _isServer() = 0;
+
+    void _setSocket(int socket);
 };
 
 class SocketConnectionManager {

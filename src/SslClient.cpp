@@ -2,6 +2,45 @@
 
 using namespace AsyncTcpSock;
 
+bool SslClient::connect(IPAddress ip, std::uint16_t port) {
+    return ClientBase::connect(std::move(ip), port);
+}
+
+bool SslClient::connect(const char* host, std::uint16_t port) {
+#if ASYNC_TCP_SSL_ENABLED
+    _hostname = host;
+#endif
+    return ClientBase::connect(host, port);
+}
+
+void SslClient::setRootCa(const char* rootca, const size_t len) {
+#if ASYNC_TCP_SSL_ENABLED
+    _root_ca = (char*)rootca;
+    _root_ca_len = len;
+#endif
+}
+
+void SslClient::setClientCert(const char* cli_cert, const size_t len) {
+#if ASYNC_TCP_SSL_ENABLED
+    _cli_cert = (char*)cli_cert;
+    _cli_cert_len = len;
+#endif
+}
+
+void SslClient::setClientKey(const char* cli_key, const size_t len) {
+#if ASYNC_TCP_SSL_ENABLED
+    _cli_key = (char*)cli_key;
+    _cli_key_len = len;
+#endif
+}
+
+void SslClient::setPsk(const char* psk_ident, const char* psk) {
+#if ASYNC_TCP_SSL_ENABLED
+    _psk_ident = psk_ident;
+    _psk = psk;
+#endif
+}
+
 void SslClient::_close() {
     ClientBase::_close();
 
@@ -13,7 +52,7 @@ void SslClient::_close() {
 #endif
 }
 
-bool SslClient::_flushWriteQueue() {
+bool SslClient::_processWriteQueue(std::unique_lock<std::mutex>&) {
 #if ASYNC_TCP_SSL_ENABLED
     if (_sslctx != NULL) {
         r = _sslctx->write(p, n);

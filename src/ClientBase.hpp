@@ -5,6 +5,7 @@
 #include <bitset>
 #include <chrono>
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,8 @@
 #include <lwip/err.h>
 
 #include "Callbacks.hpp"
+#include "Client.hpp"
+#include "Configuration.hpp"
 #include "SocketConnection.hpp"
 #include "WriteQueueBuffer.hpp"
 
@@ -32,6 +35,7 @@ enum class ConnectionState : std::uint8_t {
     CONNECTED,
 };
 
+template <class Client>
 class ClientBase : public SocketConnection {
     static constexpr int ERR_DNS_RESOLUTION_FAILED = -55;
     static constexpr std::size_t INITIAL_WRITE_SPACE = TCP_SND_BUF;
@@ -40,7 +44,7 @@ class ClientBase : public SocketConnection {
     // by the manager task.
     static inline std::array<std::uint8_t, TCP_MSS> SHARED_READ_BUFFER{};
 
-    Callbacks<ClientBase> _callbacks;  // TODO Replace with actual client argument
+    Callbacks<Client> _callbacks;
 
     ConnectionState _state = ConnectionState::DISCONNECTED;
 
@@ -53,16 +57,33 @@ class ClientBase : public SocketConnection {
     IPAddress _ip{};
     std::uint16_t _port{};
 
-    std::optional<std::chrono::steady_clock::duration> _ack_timeout = std::nullopt;
+    std::optional<std::chrono::steady_clock::duration> _ack_timeout =
+        std::chrono::milliseconds(CONFIG_ASYNC_TCP_MAX_ACK_TIME);
     std::optional<std::chrono::steady_clock::duration> _rx_timeout = std::nullopt;
     std::chrono::steady_clock::time_point _rx_last_packet{};
     bool _ack_timeout_signaled = false;
 
   public:
+    using Callbacks = Callbacks<Client>;
+
     static void dnsFoundCallback(const char* name, const ip_addr_t* ip, void* arg);
 
-    bool connect(IPAddress ip, std::uint16_t port);
-    bool connect(const char* host, std::uint16_t port);
+    /// Create a client in an unconnected state.
+    ClientBase();
+    /// Create a client from an existing connected socket, for example from ::accept() in
+    /// a server.
+    ClientBase(int socket);
+
+    ClientBase(const ClientBase& other) = delete;
+    ClientBase(ClientBase&& other) = delete;
+
+    ClientBase& operator=(const ClientBase& other) = delete;
+    ClientBase& operator=(ClientBase&& other) = delete;
+
+    virtual ~ClientBase();
+
+    virtual bool connect(IPAddress ip, std::uint16_t port);
+    virtual bool connect(const char* host, std::uint16_t port);
 
     void close(bool now = false);
     err_enum_t abort();
@@ -72,19 +93,27 @@ class ClientBase : public SocketConnection {
     bool canSend() const;
     std::size_t space() const;
 
-    /// Add the buffer to the send queue
-    size_t add(const char* data,
-               size_t size,
-               ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
-    /// Push everything from the send queue to LWIP to send it
+    /// Add the buffer to the send queue. It will be sent by the manager task as soon as
+    /// possible.
+    std::size_t add(std::span<const std::uint8_t> data,
+                    ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
+    std::size_t add(const std::uint8_t* data,
+                    std::size_t size,
+                    ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
+    /// Push everything from the send queue to LWIP to immediately send it. Calling this
+    /// explicitly is unnecessary, but be aware that any callbacks will run in the
+    /// calling thread if you do so.
     bool send();
 
-    /// write equals add()+send()
-    size_t write(const char* data);
-    size_t write(const char* data,
-                 size_t size,
-                 ClientApiFlags apiflags = std::to_underlying(
-                     ClientApiFlag::COPY));  // only when canSend() == true
+    /// Adds data to the send queue and immediately attempts to send it if the queue
+    /// wasn't full.
+    std::size_t write(const char* str);
+    std::size_t write(const std::uint8_t* bytes,
+                      std::size_t size,
+                      ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
+
+    void setAckTimeout(std::optional<std::chrono::steady_clock::duration> timeout);
+    void setRxTimeout(std::optional<std::chrono::steady_clock::duration> timeout);
 
   protected:
     virtual void _close();
@@ -98,6 +127,8 @@ class ClientBase : public SocketConnection {
     bool _checkRxTimeout();
 
     // SocketConnection
+    bool _pendingWrite() override;
+
     bool _sockIsWriteable() override;
     void _sockIsReadable() override;
 
@@ -106,5 +137,7 @@ class ClientBase : public SocketConnection {
 };
 
 }  // namespace AsyncTcpSock
+
+#include "ClientBase.tpp"
 
 #endif
