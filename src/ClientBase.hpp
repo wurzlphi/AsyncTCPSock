@@ -13,7 +13,6 @@
 #include <lwip/err.h>
 
 #include "Callbacks.hpp"
-#include "Client.hpp"
 #include "Configuration.hpp"
 #include "SocketConnection.hpp"
 #include "WriteQueueBuffer.hpp"
@@ -44,8 +43,10 @@ class ClientBase : public SocketConnection {
     // by the manager task.
     static inline std::array<std::uint8_t, TCP_MSS> SHARED_READ_BUFFER{};
 
+  protected:
     Callbacks<Client> _callbacks;
 
+  private:
     ConnectionState _state = ConnectionState::DISCONNECTED;
 
     std::mutex _writeMutex{};

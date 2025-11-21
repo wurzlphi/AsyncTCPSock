@@ -100,6 +100,19 @@ struct Callbacks {
     }
 };
 
+template <class Server,
+          class Client = Server::ClientType,
+          class AcceptArg = void*,
+          class AcceptHandler_ = std::function<void(AcceptArg arg, Client* client)>>
+struct ServerCallbacks {
+    using AcceptHandler = AcceptHandler_;
+
+    Server* server;
+
+    AcceptArg acceptArg;
+    AcceptHandler acceptHandler;
+};
+
 }  // namespace AsyncTcpSock
 
 #endif

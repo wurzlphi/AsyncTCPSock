@@ -61,16 +61,10 @@ class Client : public ClientBase<Client> {
     Client& operator=(const Client& other) = delete;
     Client& operator=(Client&& other) = delete;
 
-    std::uint32_t getRemoteAddress();
-    std::uint16_t getRemotePort();
-    std::uint32_t getLocalAddress();
-    std::uint16_t getLocalPort();
-
-    // compatibility
-    IPAddress remoteIP();
-    std::uint16_t remotePort();
-    IPAddress localIP();
-    std::uint16_t localPort();
+    IPAddress remoteIP() const;
+    std::uint16_t remotePort() const;
+    IPAddress localIP() const;
+    std::uint16_t localPort() const;
 
     // on successful connect
     void onConnect(Callbacks::ConnectHandler cb, void* arg = nullptr);

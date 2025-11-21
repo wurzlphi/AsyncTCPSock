@@ -284,9 +284,10 @@ void ClientBase<Client>::_close() {
 
 template <class Client>
 void ClientBase<Client>::_error(int errorCode) {
-    _close();
-    // TODO: Callback order switched wrt original impl. Issue?
+    // The disconnect callback may delete this client, therefore _close() has to be the
+    // last operation.
     _callbacks.invoke(CallbackType::ERROR, errorCode);
+    _close();
 }
 
 template <class Client>
@@ -535,6 +536,7 @@ void ClientBase<Client>::_sockPoll() {
     if (_checkRxTimeout()) {
         // A receive timeout will close the connection if the socket is no more readable
         _close();
+        // _close() may have deleted this client, don't do anything more
         return;
     }
 

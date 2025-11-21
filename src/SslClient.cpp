@@ -41,6 +41,31 @@ void SslClient::setPsk(const char* psk_ident, const char* psk) {
 #endif
 }
 
+int SslClient::_runSSLHandshakeLoop() {
+#if ASYNC_TCP_SSL_ENABLED
+    int res = 0;
+
+    while (!_handshake_done) {
+        res = _sslctx->runSSLHandshake();
+        if (res == 0) {
+            // Handshake successful
+            _handshake_done = true;
+        } else if (ASYNCTCP_TLS_CAN_RETRY(res)) {
+            // Ran out of readable data or writable space on socket, must continue later
+            break;
+        } else {
+            // SSL handshake for AsyncTCP does not inform SSL errors
+            log_e("TLS setup failed with error %d, closing socket...", res);
+            _close();
+            // _sslctx should be NULL after this
+            break;
+        }
+    }
+
+    return res;
+#endif
+}
+
 void SslClient::_close() {
     ClientBase::_close();
 
