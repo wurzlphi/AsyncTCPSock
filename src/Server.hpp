@@ -36,6 +36,7 @@ class Server : public SocketConnection {
     void end();
 
     void onClient(Callbacks::AcceptHandler cb, void* arg = nullptr);
+    // Disable Nagle's algorithm on new connections
     void setNoDelay(bool noDelay);
 
   protected:

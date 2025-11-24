@@ -52,31 +52,6 @@ void SocketConnection::setLastActive(std::chrono::steady_clock::time_point when)
     _sock_lastactivity = when;
 }
 
-void SocketConnection::setNoDelay(bool nodelay) {
-    if (!isOpen())
-        return;
-
-    int res = setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(bool));
-    if (res < 0) {
-        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
-    }
-}
-
-bool SocketConnection::getNoDelay() {
-    if (!isOpen())
-        // Nagle's algorithm is enabled by default
-        return false;
-
-    bool nodelay = false;
-    socklen_t size = sizeof(bool);
-    int res = getsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, &size);
-    if (res < 0) {
-        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
-    }
-
-    return nodelay;
-}
-
 void SocketConnection::_setSocket(int socket) {
     fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
     _socket = socket;
@@ -108,6 +83,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
     workingCopy.reserve(CONFIG_LWIP_MAX_SOCKETS);
 #endif
 
+    log_d("AsyncTCPSock worker task started");
+
     while (true) {
         fd_set sockSet_r;
         fd_set sockSet_w;
@@ -118,6 +95,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         // end up in the sockList.
         FD_ZERO(&sockSet_r);
         FD_ZERO(&sockSet_w);
+
+        log_d("Collecting active sockets for select()...");
 
         manager.iterateConnections([&](SocketConnection* it) {
             const auto socket = it->_socket.load();
@@ -147,6 +126,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
         if (success > 0) {
             {
+                log_d("Writing to writable sockets...");
+
                 // Collect and notify all writable sockets. Half-destroyed connections
                 // should have set _socket to -1 and therefore should not end up in
                 // the sockList.
@@ -167,6 +148,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
                 workingCopy.clear();
             }
             {
+                log_d("Reading from readable sockets...");
+
                 // Collect and notify all readable sockets. Half-destroyed connections
                 // should have set _socket to -1 and therefore should not end up in
                 // the sockList.
@@ -188,6 +171,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         }
 
         {
+            log_d("Updating sockets with finished DNS resolution...");
+
             // Collect and notify all sockets waiting for DNS completion
             manager.iterateConnections([&](SocketConnection* it) {
                 // Collect socket that has finished resolving DNS (with or without
@@ -209,6 +194,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         // xSemaphoreGiveRecursive(_asyncsock_mutex);
 
         {
+            log_d("Polling sockets for activity timeout...");
+
             // Collect and run activity poll on all pollable sockets
             // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
             manager.iterateConnections([&](SocketConnection* it) {
@@ -233,6 +220,8 @@ void SocketConnectionManager::updateConnectionStates(void*) {
 }
 
 void SocketConnectionManager::addConnection(SocketConnection* connection) {
+    log_d("Adding connection %p", connection);
+
     if (connection != nullptr) {
         std::lock_guard lock(managerMutex);
         connections.push_back(connection);
@@ -240,6 +229,8 @@ void SocketConnectionManager::addConnection(SocketConnection* connection) {
 }
 
 void SocketConnectionManager::removeConnection(SocketConnection* connection) {
+    log_d("Removing connection %p", connection);
+
     if (connection != nullptr) {
         std::lock_guard lock(managerMutex);
         std::erase(connections, connection);

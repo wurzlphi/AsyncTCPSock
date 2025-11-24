@@ -60,7 +60,7 @@ IPAddress Client::remoteIP() const {
     }
 
     return withSockAddr(
-        [&](sockaddr* addr, std::size_t size) { getpeername(_socket, addr, &size); },
+        [&](sockaddr* addr, socklen_t size) { getpeername(_socket, addr, &size); },
         [](sockaddr_in& s) { return IPAddress(s.sin_addr.s_addr); },
         [](sockaddr_in6& s) {
             if (s.sin6_scope_id > 0xFF) {
@@ -78,7 +78,7 @@ std::uint16_t Client::remotePort() const {
     }
 
     return withSockAddr(
-        [&](sockaddr* addr, std::size_t size) { getpeername(_socket, addr, &size); },
+        [&](sockaddr* addr, socklen_t size) { getpeername(_socket, addr, &size); },
         [](sockaddr_in& s) { return ntohs(s.sin_port); },
         [](sockaddr_in6& s) { return ntohs(s.sin6_port); });
 }
@@ -89,7 +89,7 @@ IPAddress Client::localIP() const {
     }
 
     return withSockAddr(
-        [&](sockaddr* addr, std::size_t size) { getsockname(_socket, addr, &size); },
+        [&](sockaddr* addr, socklen_t size) { getsockname(_socket, addr, &size); },
         [](sockaddr_in& s) { return IPAddress(s.sin_addr.s_addr); },
         [](sockaddr_in6& s) {
             if (s.sin6_scope_id > 0xFF) {
@@ -107,7 +107,7 @@ std::uint16_t Client::localPort() const {
     }
 
     return withSockAddr(
-        [&](sockaddr* addr, std::size_t size) { getsockname(_socket, addr, &size); },
+        [&](sockaddr* addr, socklen_t size) { getsockname(_socket, addr, &size); },
         [](sockaddr_in& s) { return ntohs(s.sin_port); },
         [](sockaddr_in6& s) { return ntohs(s.sin6_port); });
 }

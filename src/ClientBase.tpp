@@ -24,7 +24,7 @@
 #endif
 #endif
 
-using namespace AsyncTcpSock;
+namespace AsyncTcpSock {
 
 // This function runs in the LWIP thread
 template <class Client>
@@ -216,6 +216,20 @@ std::size_t ClientBase<Client>::add(const std::uint8_t* data,
 }
 
 template <class Client>
+std::size_t ClientBase<Client>::add(const char* str,
+                                    std::size_t size,
+                                    ClientApiFlags apiFlags) {
+    if (str == nullptr)
+        return 0;
+
+    if (size == 0) {
+        size = std::strlen(str);
+    }
+
+    return add(reinterpret_cast<const std::uint8_t*>(str), size, apiFlags);
+}
+
+template <class Client>
 bool ClientBase<Client>::send() {
     if (!connected())
         return false;
@@ -234,11 +248,11 @@ bool ClientBase<Client>::send() {
 }
 
 template <class Client>
-std::size_t ClientBase<Client>::write(const char* str) {
+std::size_t ClientBase<Client>::write(const char* str, ClientApiFlags apiFlags) {
     if (str == nullptr)
         return 0;
 
-    return write(reinterpret_cast<const std::uint8_t*>(str), std::strlen(str));
+    return write(reinterpret_cast<const std::uint8_t*>(str), std::strlen(str), apiFlags);
 }
 
 template <class Client>
@@ -261,6 +275,35 @@ std::size_t ClientBase<Client>::write(const std::uint8_t* bytes,
 }
 
 template <class Client>
+void ClientBase<Client>::setNoDelay(bool nodelay) {
+    if (!isOpen())
+        return;
+
+    errno = 0;
+    int res = setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(bool));
+    if (res < 0) {
+        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
+    }
+}
+
+template <class Client>
+bool ClientBase<Client>::getNoDelay() {
+    if (!isOpen())
+        // Nagle's algorithm is enabled by default
+        return false;
+
+    bool nodelay = false;
+    socklen_t size = sizeof(bool);
+    errno = 0;
+    int res = getsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, &size);
+    if (res < 0) {
+        log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
+    }
+
+    return nodelay;
+}
+
+template <class Client>
 void ClientBase<Client>::setAckTimeout(
     std::optional<std::chrono::steady_clock::duration> timeout) {
     _ack_timeout = timeout;
@@ -279,14 +322,14 @@ void ClientBase<Client>::_close() {
 
     _clearWriteQueue();
 
-    _callbacks.invoke(CallbackType::DISCONNECT);
+    _callbacks.template invoke<CallbackType::DISCONNECT>();
 }
 
 template <class Client>
 void ClientBase<Client>::_error(int errorCode) {
     // The disconnect callback may delete this client, therefore _close() has to be the
     // last operation.
-    _callbacks.invoke(CallbackType::ERROR, errorCode);
+    _callbacks.template invoke<CallbackType::ERROR>(errorCode);
     _close();
 }
 
@@ -357,7 +400,7 @@ void ClientBase<Client>::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) 
     lock.unlock();
 
     for (const WriteStats& stats : notifyQueue) {
-        _callbacks.invoke(CallbackType::SENT, stats.length, stats.delay.count());
+        _callbacks.template invoke<CallbackType::SENT>(stats.length, stats.delay.count());
     }
 }
 
@@ -389,7 +432,8 @@ bool ClientBase<Client>::_checkAckTimeout() {
             _ack_timeout_signaled = true;
 
             lock.unlock();
-            _callbacks.invoke(CallbackType::TIMEOUT, delay);
+            _callbacks.template invoke<CallbackType::TIMEOUT>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(delay).count());
 
             return true;
         }
@@ -467,7 +511,7 @@ bool ClientBase<Client>::_sockIsWriteable() {
         _state = ConnectionState::CONNECTED;
         _rx_last_packet = std::chrono::steady_clock::now();
         _ack_timeout_signaled = false;
-        _callbacks.invoke(CallbackType::CONNECT, this);
+        _callbacks.template invoke<CallbackType::CONNECT>();
     }
 
     {
@@ -492,7 +536,7 @@ void ClientBase<Client>::_sockIsReadable() {
     if (result > 0) {
         _rx_last_packet = std::chrono::steady_clock::now();
         // result contains the amount of data read
-        _callbacks.invoke(CallbackType::RECV, SHARED_READ_BUFFER.data(), result);
+        _callbacks.template invoke<CallbackType::RECV>(SHARED_READ_BUFFER.data(), result);
     } else if (result == 0) {
         // A successful read of 0 bytes indicates that the remote side closed the
         // connection
@@ -540,7 +584,9 @@ void ClientBase<Client>::_sockPoll() {
         return;
     }
 
-    _callbacks.invoke(CallbackType::POLL);
+    _callbacks.template invoke<CallbackType::POLL>();
 }
+
+}  // namespace AsyncTcpSock
 
 #endif

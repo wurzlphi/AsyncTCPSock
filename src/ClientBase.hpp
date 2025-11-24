@@ -26,6 +26,10 @@ enum class ClientApiFlag : std::uint8_t {
                          // to be sent before the application should react.
 };
 
+// compatibility
+#define ASYNC_WRITE_FLAG_COPY (std::to_underlying(AsyncTcpSock::ClientApiFlag::COPY))
+#define ASYNC_WRITE_FLAG_MORE (std::to_underlying(AsyncTcpSock::ClientApiFlag::MORE))
+
 using ClientApiFlags = std::bitset<8>;
 
 enum class ConnectionState : std::uint8_t {
@@ -36,17 +40,20 @@ enum class ConnectionState : std::uint8_t {
 
 template <class Client>
 class ClientBase : public SocketConnection {
+  public:
+    using Callbacks = ClientCallbacks<Client>;
+
     static constexpr int ERR_DNS_RESOLUTION_FAILED = -55;
     static constexpr std::size_t INITIAL_WRITE_SPACE = TCP_SND_BUF;
 
+  protected:
+    Callbacks _callbacks;
+
+  private:
     // This buffer can be shared for all clients since reading is performed sequentially
     // by the manager task.
     static inline std::array<std::uint8_t, TCP_MSS> SHARED_READ_BUFFER{};
 
-  protected:
-    Callbacks<Client> _callbacks;
-
-  private:
     ConnectionState _state = ConnectionState::DISCONNECTED;
 
     std::mutex _writeMutex{};
@@ -65,8 +72,6 @@ class ClientBase : public SocketConnection {
     bool _ack_timeout_signaled = false;
 
   public:
-    using Callbacks = Callbacks<Client>;
-
     static void dnsFoundCallback(const char* name, const ip_addr_t* ip, void* arg);
 
     /// Create a client in an unconnected state.
@@ -97,10 +102,14 @@ class ClientBase : public SocketConnection {
     /// Add the buffer to the send queue. It will be sent by the manager task as soon as
     /// possible.
     std::size_t add(std::span<const std::uint8_t> data,
-                    ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
+                    ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
     std::size_t add(const std::uint8_t* data,
                     std::size_t size,
-                    ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
+                    ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
+    // compatibility
+    std::size_t add(const char* str,
+                    std::size_t size = 0,
+                    ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
     /// Push everything from the send queue to LWIP to immediately send it. Calling this
     /// explicitly is unnecessary, but be aware that any callbacks will run in the
     /// calling thread if you do so.
@@ -108,13 +117,44 @@ class ClientBase : public SocketConnection {
 
     /// Adds data to the send queue and immediately attempts to send it if the queue
     /// wasn't full.
-    std::size_t write(const char* str);
+    std::size_t write(const char* str,
+                      ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
     std::size_t write(const std::uint8_t* bytes,
                       std::size_t size,
-                      ClientApiFlags apiflags = std::to_underlying(ClientApiFlag::COPY));
+                      ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
+
+    // If true, disables Nagle's algorithm (TCP_NODELAY)
+    void setNoDelay(bool nodelay);
+    bool getNoDelay();
 
     void setAckTimeout(std::optional<std::chrono::steady_clock::duration> timeout);
     void setRxTimeout(std::optional<std::chrono::steady_clock::duration> timeout);
+
+    // compatibility
+    template <class Integer>
+        requires std::is_integral_v<Integer>
+    void setAckTimeout(Integer milliseconds) {
+        if (milliseconds <= 0) {
+            setAckTimeout(std::nullopt);
+            return;
+        }
+
+        setAckTimeout(
+            std::chrono::steady_clock::duration(std::chrono::milliseconds(milliseconds)));
+    }
+
+    // compatibility
+    template <class Integer>
+        requires std::is_integral_v<Integer>
+    void setRxTimeout(Integer milliseconds) {
+        if (milliseconds <= 0) {
+            setRxTimeout(std::nullopt);
+            return;
+        }
+
+        setRxTimeout(
+            std::chrono::steady_clock::duration(std::chrono::milliseconds(milliseconds)));
+    }
 
   protected:
     virtual void _close();

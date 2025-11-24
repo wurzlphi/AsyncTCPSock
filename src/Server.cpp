@@ -5,11 +5,13 @@ using namespace AsyncTcpSock;
 Server::Server(std::uint16_t port)
     : SocketConnection(true), _port(port) {
     manage();
+    log_d("Server created on port %d", port);
 }
 
 Server::Server(IPAddress addr, std::uint16_t port)
     : SocketConnection(true), _addr(addr), _port(port) {
     manage();
+    log_d("Server created on %s:%d", addr.toString().c_str(), port);
 }
 
 Server::~Server() noexcept {
@@ -54,6 +56,9 @@ void Server::begin() {
     }
 
     _socket = socket;
+
+    log_d("Server acquired socket %d, listening on %s:%d",
+          socket, _addr.toString().c_str(), _port);
 }
 
 void Server::end() {
@@ -62,6 +67,8 @@ void Server::end() {
     }
 
     ::close(_socket.exchange(-1));
+
+    log_d("Server socket closed");
 }
 
 void Server::onClient(Callbacks::AcceptHandler cb, void* arg) {

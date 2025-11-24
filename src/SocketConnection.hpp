@@ -49,10 +49,6 @@ struct SocketConnection {
     void setLastActive(
         std::chrono::steady_clock::time_point when = std::chrono::steady_clock::now());
 
-    // If true, disables Nagle's algorithm (TCP_NODELAY)
-    void setNoDelay(bool nodelay);
-    bool getNoDelay();
-
   protected:
     // Action to take on a writable socket
     virtual bool _sockIsWriteable() = 0;

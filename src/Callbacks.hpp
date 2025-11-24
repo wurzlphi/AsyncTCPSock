@@ -36,8 +36,8 @@ template <
         std::function<void(ErrorArg arg, Client* client, int errorCode)>,
     class TimeoutArg = void*,
     class TimeoutHandler_ =
-        std::function<void(TimeoutArg arg, Client* client, std::uint32_t timestamp)>>
-struct Callbacks {
+        std::function<void(TimeoutArg arg, Client* client, std::uint32_t delayMillis)>>
+struct ClientCallbacks {
     using ConnectHandler = ConnectHandler_;
     using DisconnectHandler = DisconnectHandler_;
     using PollHandler = PollHandler_;
@@ -69,33 +69,48 @@ struct Callbacks {
     TimeoutArg timeoutArg;
     TimeoutHandler timeoutHandler;
 
-    template <class... Args>
-    void invoke(CallbackType type, Args&&... args) const {
-        switch (type) {
-            using enum CallbackType;
-            case CONNECT:
-                return std::invoke(connectHandler, connectArg, client,
-                                   std::forward<Args>(args)...);
-            case DISCONNECT:
-                return std::invoke(disconnectHandler, disconnectArg, client,
-                                   std::forward<Args>(args)...);
-            case POLL:
-                return std::invoke(pollHandler, pollArg, client,
-                                   std::forward<Args>(args)...);
-            case SENT:
-                return std::invoke(sentHandler, sentArg, client,
-                                   std::forward<Args>(args)...);
-            case RECV:
-                return std::invoke(recvHandler, recvArg, client,
-                                   std::forward<Args>(args)...);
-            case ERROR:
-                return std::invoke(errorHandler, errorArg, client,
-                                   std::forward<Args>(args)...);
-            case TIMEOUT:
-                return std::invoke(timeoutHandler, timeoutArg, client,
-                                   std::forward<Args>(args)...);
-            default:
-                std::unreachable();
+    template <CallbackType TYPE, class... Args>
+    void invoke(Args&&... args) {
+        if constexpr (TYPE == CallbackType::CONNECT) {
+            if (!connectHandler)
+                return;
+
+            std::invoke(connectHandler, connectArg, client, std::forward<Args>(args)...);
+        } else if constexpr (TYPE == CallbackType::DISCONNECT) {
+            if (!disconnectHandler)
+                return;
+
+            std::invoke(disconnectHandler, disconnectArg, client,
+                        std::forward<Args>(args)...);
+        } else if constexpr (TYPE == CallbackType::POLL) {
+            if (!pollHandler)
+                return;
+
+            std::invoke(pollHandler, pollArg, client, std::forward<Args>(args)...);
+        } else if constexpr (TYPE == CallbackType::SENT) {
+            if (!sentHandler)
+                return;
+
+            std::invoke(sentHandler, sentArg, client, std::forward<Args>(args)...);
+        } else if constexpr (TYPE == CallbackType::RECV) {
+            if (!recvHandler)
+                return;
+
+            std::invoke(recvHandler, recvArg, client, std::forward<Args>(args)...);
+        } else if constexpr (TYPE == CallbackType::ERROR) {
+            if (!errorHandler)
+                return;
+
+            std::invoke(errorHandler, errorArg, client, std::forward<Args>(args)...);
+        } else if constexpr (TYPE == CallbackType::TIMEOUT) {
+            if (!timeoutHandler)
+                return;
+
+            std::invoke(timeoutHandler, timeoutArg, client, std::forward<Args>(args)...);
+
+        } else {
+            static_assert(false, "Invalid CallbackType");
+            std::unreachable();
         }
     }
 };

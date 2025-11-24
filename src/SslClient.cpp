@@ -64,6 +64,7 @@ int SslClient::_runSSLHandshakeLoop() {
 
     return res;
 #endif
+    return 0;
 }
 
 void SslClient::_close() {
@@ -95,6 +96,7 @@ bool SslClient::_processWriteQueue(std::unique_lock<std::mutex>&) {
         r = lwip_write(_socket, p, n);
     }
 #endif
+    return false;
 }
 
 bool SslClient::_sockIsWriteable() {
@@ -138,6 +140,7 @@ bool SslClient::_sockIsWriteable() {
         // Fallthrough to ordinary successful connection
     }
 #endif
+    return false;
 }
 
 void SslClient::_sockIsReadable() {
