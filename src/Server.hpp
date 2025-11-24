@@ -11,6 +11,8 @@ class Server : public SocketConnection {
     using ClientType = Client;
     using Callbacks = ServerCallbacks<Server>;
 
+    static constexpr int BACKLOG = 5;
+
   private:
     IPAddress _addr{IP_ADDR_ANY};
     std::uint16_t _port = 0;
@@ -22,19 +24,26 @@ class Server : public SocketConnection {
     Server(std::uint16_t port);
     Server(IPAddress addr, std::uint16_t port);
 
+    ~Server() noexcept override;
+
     Server(const Server& other) = delete;
     Server(Server&& other) = delete;
 
     Server& operator=(const Server& other) = delete;
     Server& operator=(Server&& other) = delete;
 
-    ~Server() noexcept override;
-
     void begin();
     void end();
 
     void onClient(Callbacks::AcceptHandler cb, void* arg = nullptr);
     void setNoDelay(bool noDelay);
+
+  protected:
+    bool _sockIsWriteable() override;
+    void _sockIsReadable() override;
+    void _sockDelayedConnect() override;
+    void _sockPoll() override;
+    bool _pendingWrite() override;
 };
 
 }  // namespace AsyncTcpSock

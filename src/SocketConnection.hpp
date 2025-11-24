@@ -35,13 +35,13 @@ struct SocketConnection {
     SocketConnection(bool isServer);
     SocketConnection(int socket, bool isServer);
 
+    virtual ~SocketConnection() = default;
+
     SocketConnection(const SocketConnection& other) = delete;
     SocketConnection(SocketConnection&& other) = delete;
 
     SocketConnection& operator=(const SocketConnection& other) = delete;
     SocketConnection& operator=(SocketConnection&& other) = delete;
-
-    virtual ~SocketConnection();
 
     bool isOpen() const;
 
@@ -67,6 +67,12 @@ struct SocketConnection {
     virtual bool _pendingWrite() = 0;
 
     void _setSocket(int socket);
+
+    // Must be called manually in constructor/destructor of derived classes to ensure
+    // correct behavior.
+    // TODO Maybe refactor into a wrapper class
+    void manage();
+    void unmanage();
 };
 
 class SocketConnectionManager {

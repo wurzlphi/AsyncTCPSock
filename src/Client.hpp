@@ -55,6 +55,8 @@ class Client : public ClientBase<Client> {
     Client();
     Client(int socket);
 
+    ~Client() noexcept override;
+
     Client(const Client& other) = delete;
     Client(Client&& other) = delete;
 

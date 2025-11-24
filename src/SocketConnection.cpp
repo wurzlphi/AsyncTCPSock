@@ -33,18 +33,11 @@ static void leave_wdt() {
 //
 SocketConnection::SocketConnection(bool isServer)
     : _isServer(isServer) {
-    // Add this base socket to the monitored list
-    SocketConnectionManager::instance().addConnection(this);
 }
 
 SocketConnection::SocketConnection(int socket, bool isServer)
     : SocketConnection(isServer) {
     _setSocket(socket);
-}
-
-SocketConnection::~SocketConnection() {
-    // Remove this base socket from the monitored list
-    SocketConnectionManager::instance().removeConnection(this);
 }
 
 bool SocketConnection::isOpen() const {
@@ -87,6 +80,14 @@ bool SocketConnection::getNoDelay() {
 void SocketConnection::_setSocket(int socket) {
     fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
     _socket = socket;
+}
+
+void SocketConnection::manage() {
+    SocketConnectionManager::instance().addConnection(this);
+}
+
+void SocketConnection::unmanage() {
+    SocketConnectionManager::instance().removeConnection(this);
 }
 
 //
