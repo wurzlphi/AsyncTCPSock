@@ -53,7 +53,12 @@ void SocketConnection::setLastActive(std::chrono::steady_clock::time_point when)
 }
 
 void SocketConnection::_setSocket(int socket) {
-    fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
+    int res = fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
+    if (res < 0) {
+        log_e("fcntl() error: %d (%s)", errno, strerror(errno));
+        ::close(socket);
+    }
+
     _socket = socket;
 }
 
@@ -83,7 +88,7 @@ void SocketConnectionManager::updateConnectionStates(void*) {
     workingCopy.reserve(CONFIG_LWIP_MAX_SOCKETS);
 #endif
 
-    log_d("AsyncTCPSock worker task started");
+    log_d_("AsyncTCPSock worker task started");
 
     while (true) {
         fd_set sockSet_r;
@@ -96,7 +101,7 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         FD_ZERO(&sockSet_r);
         FD_ZERO(&sockSet_w);
 
-        log_d("Collecting active sockets for select()...");
+        log_d_("Collecting active sockets for select()...");
 
         manager.iterateConnections([&](SocketConnection* it) {
             const auto socket = it->_socket.load();
@@ -123,10 +128,9 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         tv.tv_usec = POLL_INTERVAL.count() * 1000;
 
         int success = select(max_sock, &sockSet_r, &sockSet_w, NULL, &tv);
-        // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
         if (success > 0) {
             {
-                log_d("Writing to writable sockets...");
+                log_d_("Writing to writable sockets...");
 
                 // Collect and notify all writable sockets. Half-destroyed connections
                 // should have set _socket to -1 and therefore should not end up in
@@ -148,7 +152,7 @@ void SocketConnectionManager::updateConnectionStates(void*) {
                 workingCopy.clear();
             }
             {
-                log_d("Reading from readable sockets...");
+                log_d_("Reading from readable sockets...");
 
                 // Collect and notify all readable sockets. Half-destroyed connections
                 // should have set _socket to -1 and therefore should not end up in
@@ -171,7 +175,7 @@ void SocketConnectionManager::updateConnectionStates(void*) {
         }
 
         {
-            log_d("Updating sockets with finished DNS resolution...");
+            log_d_("Updating sockets with finished DNS resolution...");
 
             // Collect and notify all sockets waiting for DNS completion
             manager.iterateConnections([&](SocketConnection* it) {
@@ -191,13 +195,11 @@ void SocketConnectionManager::updateConnectionStates(void*) {
 
             workingCopy.clear();
         }
-        // xSemaphoreGiveRecursive(_asyncsock_mutex);
 
         {
-            log_d("Polling sockets for activity timeout...");
+            log_d_("Polling sockets to check timeouts...");
 
             // Collect and run activity poll on all pollable sockets
-            // xSemaphoreTakeRecursive(_asyncsock_mutex, (TickType_t)portMAX_DELAY);
             manager.iterateConnections([&](SocketConnection* it) {
                 const auto now = std::chrono::steady_clock::now();
                 if (now - it->getLastActive() >= POLL_INTERVAL) {
@@ -214,13 +216,27 @@ void SocketConnectionManager::updateConnectionStates(void*) {
             }
 
             workingCopy.clear();
-            // xSemaphoreGiveRecursive(_asyncsock_mutex);
+        }
+
+        {
+            log_d_("Cleaning up...");
+
+            // Collect and run activity poll on all pollable sockets
+            manager.iterateConnections(
+                [&](SocketConnection* it) { workingCopy.push_back(it); });
+
+            // Run activity poll on all pollable sockets
+            for (const auto& it : workingCopy) {
+                it->_processingDone();
+            }
+
+            workingCopy.clear();
         }
     }
 }
 
 void SocketConnectionManager::addConnection(SocketConnection* connection) {
-    log_d("Adding connection %p", connection);
+    log_d_("Adding connection %p", connection);
 
     if (connection != nullptr) {
         std::lock_guard lock(managerMutex);
@@ -229,7 +245,7 @@ void SocketConnectionManager::addConnection(SocketConnection* connection) {
 }
 
 void SocketConnectionManager::removeConnection(SocketConnection* connection) {
-    log_d("Removing connection %p", connection);
+    log_d_("Removing connection %p", connection);
 
     if (connection != nullptr) {
         std::lock_guard lock(managerMutex);

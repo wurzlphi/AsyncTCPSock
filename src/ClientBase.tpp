@@ -57,7 +57,7 @@ ClientBase<Client>::ClientBase(int socket)
 }
 
 template <class Client>
-ClientBase<Client>::~ClientBase() {
+ClientBase<Client>::~ClientBase() noexcept {
     close();
 }
 
@@ -212,6 +212,9 @@ std::size_t ClientBase<Client>::add(const std::uint8_t* data,
         _ack_timeout_signaled = false;
     }
 
+    log_d_("Queued %zu bytes for sending, %zu bytes remaining space, socket %d", toSend,
+           space(), _socket.load());
+
     return toSend;
 }
 
@@ -233,6 +236,8 @@ template <class Client>
 bool ClientBase<Client>::send() {
     if (!connected())
         return false;
+
+    log_d_("socket %d", _socket.load());
 
     fd_set sockSet_w{};
     FD_ZERO(&sockSet_w);
@@ -259,6 +264,8 @@ template <class Client>
 std::size_t ClientBase<Client>::write(const std::uint8_t* bytes,
                                       std::size_t size,
                                       ClientApiFlags apiFlags) {
+    log_d_("Adding and sending at most %zu bytes to socket %d", size, _socket.load());
+
     std::size_t toSend = add(bytes, size, apiFlags);
 
     if (toSend == 0) {
@@ -279,8 +286,9 @@ void ClientBase<Client>::setNoDelay(bool nodelay) {
     if (!isOpen())
         return;
 
+    int nodelay_ = nodelay ? 1 : 0;
     errno = 0;
-    int res = setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(bool));
+    int res = setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay_, sizeof(nodelay_));
     if (res < 0) {
         log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
     }
@@ -292,15 +300,15 @@ bool ClientBase<Client>::getNoDelay() {
         // Nagle's algorithm is enabled by default
         return false;
 
-    bool nodelay = false;
-    socklen_t size = sizeof(bool);
+    int nodelay = 0;
+    socklen_t size = sizeof(nodelay);
     errno = 0;
     int res = getsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &nodelay, &size);
     if (res < 0) {
         log_e("fail on fd %d, errno: %d, \"%s\"", _socket.load(), errno, strerror(errno));
     }
 
-    return nodelay;
+    return static_cast<bool>(nodelay);
 }
 
 template <class Client>
@@ -317,19 +325,21 @@ void ClientBase<Client>::setRxTimeout(
 
 template <class Client>
 void ClientBase<Client>::_close() {
-    _state = ConnectionState::DISCONNECTED;
+    log_d_("Closing socket %d", _socket.load());
+
+    _state = ConnectionState::DISCONNECTING;
     ::close(_socket.exchange(-1));
 
     _clearWriteQueue();
-
-    _callbacks.template invoke<CallbackType::DISCONNECT>();
 }
 
 template <class Client>
 void ClientBase<Client>::_error(int errorCode) {
-    // The disconnect callback may delete this client, therefore _close() has to be the
-    // last operation.
-    _callbacks.template invoke<CallbackType::ERROR>(errorCode);
+    _callbacks.template invoke<ClientCallbackType::ERROR>(errorCode);
+
+    // We don't use _close_and_delete() here because _error() may be called with
+    // _writeMutex locked which would cause a deadlock when the destructor (invoked
+    // through the callback) tries to destroy it.
     _close();
 }
 
@@ -369,8 +379,9 @@ void ClientBase<Client>::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) 
     std::size_t toRemove = 0;
     for (const auto& buf : _writeQueue) {
         if (WriteQueueBufferUtil::hasError(buf)) {
+            lock.unlock();
             std::visit([&](auto&& it) { _error(it.errorCode); }, buf);
-            break;
+            return;
         }
 
         if (!WriteQueueBufferUtil::isFullyWritten(buf)) {
@@ -400,7 +411,8 @@ void ClientBase<Client>::_cleanupWriteQueue(std::unique_lock<std::mutex>& lock) 
     lock.unlock();
 
     for (const WriteStats& stats : notifyQueue) {
-        _callbacks.template invoke<CallbackType::SENT>(stats.length, stats.delay.count());
+        _callbacks.template invoke<ClientCallbackType::SENT>(stats.length,
+                                                             stats.delay.count());
     }
 }
 
@@ -432,7 +444,7 @@ bool ClientBase<Client>::_checkAckTimeout() {
             _ack_timeout_signaled = true;
 
             lock.unlock();
-            _callbacks.template invoke<CallbackType::TIMEOUT>(
+            _callbacks.template invoke<ClientCallbackType::TIMEOUT>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(delay).count());
 
             return true;
@@ -511,7 +523,7 @@ bool ClientBase<Client>::_sockIsWriteable() {
         _state = ConnectionState::CONNECTED;
         _rx_last_packet = std::chrono::steady_clock::now();
         _ack_timeout_signaled = false;
-        _callbacks.template invoke<CallbackType::CONNECT>();
+        _callbacks.template invoke<ClientCallbackType::CONNECT>();
     }
 
     {
@@ -536,7 +548,8 @@ void ClientBase<Client>::_sockIsReadable() {
     if (result > 0) {
         _rx_last_packet = std::chrono::steady_clock::now();
         // result contains the amount of data read
-        _callbacks.template invoke<CallbackType::RECV>(SHARED_READ_BUFFER.data(), result);
+        _callbacks.template invoke<ClientCallbackType::RECV>(SHARED_READ_BUFFER.data(),
+                                                             result);
     } else if (result == 0) {
         // A successful read of 0 bytes indicates that the remote side closed the
         // connection
@@ -558,6 +571,7 @@ void ClientBase<Client>::_sockDelayedConnect() {
 
 template <class Client>
 void ClientBase<Client>::_sockPoll() {
+    // We can be DISCONNECTED but also have a valid socket
     if (!connected())
         return;
 
@@ -568,9 +582,10 @@ void ClientBase<Client>::_sockPoll() {
         _cleanupWriteQueue(lock);
     }
 
-    // Processing notifications may have disconnected us
-    if (!connected())
+    // Processing notifications may have disconnected us and closed the socket
+    if (!connected()) {
         return;
+    }
 
     if (_checkAckTimeout()) {
         // An ACK timeout will not yet close the connection
@@ -580,11 +595,19 @@ void ClientBase<Client>::_sockPoll() {
     if (_checkRxTimeout()) {
         // A receive timeout will close the connection if the socket is no more readable
         _close();
-        // _close() may have deleted this client, don't do anything more
         return;
     }
 
-    _callbacks.template invoke<CallbackType::POLL>();
+    _callbacks.template invoke<ClientCallbackType::POLL>();
+}
+
+template <class Client>
+void ClientBase<Client>::_processingDone() {
+    if (_state == ConnectionState::DISCONNECTING) {
+        _state = ConnectionState::DISCONNECTED;
+        log_d_("Firing disconnect for client %p", this);
+        _callbacks.template invoke<ClientCallbackType::DISCONNECT>();
+    }
 }
 
 }  // namespace AsyncTcpSock

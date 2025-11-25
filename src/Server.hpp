@@ -18,7 +18,7 @@ class Server : public SocketConnection {
     std::uint16_t _port = 0;
 
     bool _noDelay = true;  // Whether new connections will use TCP_NODELAY
-    Callbacks _callbacks;
+    Callbacks _callbacks{this};
 
   public:
     Server(std::uint16_t port);
@@ -45,6 +45,7 @@ class Server : public SocketConnection {
     void _sockDelayedConnect() override;
     void _sockPoll() override;
     bool _pendingWrite() override;
+    void _processingDone() override;
 };
 
 }  // namespace AsyncTcpSock

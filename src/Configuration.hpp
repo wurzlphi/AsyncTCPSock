@@ -1,6 +1,16 @@
 #ifndef ASYNCTCPSOCK_CONFIGURATION_HPP
 #define ASYNCTCPSOCK_CONFIGURATION_HPP
 
+#define ASYNC_TCP_ENABLE_DEBUG_LOG 1
+#if ASYNC_TCP_ENABLE_DEBUG_LOG
+#include <esp32-hal-log.h>
+#define log_d_(...) log_d(__VA_ARGS__)
+#else
+#define log_d_(...) \
+    do {            \
+    } while (0)
+#endif
+
 #ifndef CONFIG_ASYNC_TCP_RUNNING_CORE
 // If core is not defined, then we are running in Arduino or PIO
 #define CONFIG_ASYNC_TCP_RUNNING_CORE -1  // any available core

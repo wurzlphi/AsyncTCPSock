@@ -3,11 +3,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include <thread>
 #include <variant>
 #include <vector>
 
-#include <esp32-hal-log.h>
 #include <lwip/sockets.h>
+
+#include "Configuration.hpp"
 
 namespace AsyncTcpSock {
 
@@ -61,6 +63,8 @@ inline std::size_t write(WriteQueueBuffer& buf, int socket) {
                 const ssize_t result = lwip_write(socket, start, toWrite);
 
                 if (result >= 0) {
+                    log_d_("socket %d lwip_write() wrote %d bytes", socket, result);
+
                     // Written some data into the socket
                     it.amountWritten += result;
                     writtenTotal += result;
@@ -69,6 +73,7 @@ inline std::size_t write(WriteQueueBuffer& buf, int socket) {
                         // We're done
                         it.writtenAt = std::chrono::steady_clock::now();
                         it.data = {};
+                        break;
                     }
                 } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     // Socket is full, could not write anything
@@ -80,6 +85,8 @@ inline std::size_t write(WriteQueueBuffer& buf, int socket) {
                     log_e("socket %d lwip_write() failed errno=%d", socket, it.errorCode);
                     break;
                 }
+
+                std::this_thread::yield();
             } while (!isFullyWritten_(it));
 
             return writtenTotal;

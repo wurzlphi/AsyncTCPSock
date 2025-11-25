@@ -36,6 +36,7 @@ enum class ConnectionState : std::uint8_t {
     DISCONNECTED,
     WAITING_FOR_DNS,
     CONNECTED,
+    DISCONNECTING,
 };
 
 template <class Client>
@@ -47,7 +48,7 @@ class ClientBase : public SocketConnection {
     static constexpr std::size_t INITIAL_WRITE_SPACE = TCP_SND_BUF;
 
   protected:
-    Callbacks _callbacks;
+    Callbacks _callbacks{static_cast<Client*>(this)};
 
   private:
     // This buffer can be shared for all clients since reading is performed sequentially
@@ -86,7 +87,7 @@ class ClientBase : public SocketConnection {
     ClientBase& operator=(const ClientBase& other) = delete;
     ClientBase& operator=(ClientBase&& other) = delete;
 
-    virtual ~ClientBase();
+    ~ClientBase() noexcept override;
 
     virtual bool connect(IPAddress ip, std::uint16_t port);
     virtual bool connect(const char* host, std::uint16_t port);
@@ -157,8 +158,10 @@ class ClientBase : public SocketConnection {
     }
 
   protected:
+    // Closes the socket and clears the write queue
     virtual void _close();
-    virtual void _error(int errorCode);
+    // Invokes the error callback and closes the socket - does not delete
+    void _error(int errorCode);
 
     virtual bool _processWriteQueue(std::unique_lock<std::mutex>& writeQueueLock);
     void _cleanupWriteQueue(std::unique_lock<std::mutex>& writeQueueLock);
@@ -175,6 +178,7 @@ class ClientBase : public SocketConnection {
 
     void _sockDelayedConnect() override;
     void _sockPoll() override;
+    void _processingDone() override;
 };
 
 }  // namespace AsyncTcpSock

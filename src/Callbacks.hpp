@@ -5,9 +5,13 @@
 #include <functional>
 #include <utility>
 
+#include <esp32-hal-log.h>
+
+#include "Configuration.hpp"
+
 namespace AsyncTcpSock {
 
-enum class CallbackType : std::uint8_t {
+enum class ClientCallbackType : std::uint8_t {
     CONNECT,
     DISCONNECT,
     POLL,
@@ -48,71 +52,87 @@ struct ClientCallbacks {
 
     Client* client;
 
-    ConnectArg connectArg;
-    ConnectHandler connectHandler;
+    ConnectArg connectArg{};
+    ConnectHandler connectHandler{};
 
-    DisconnectArg disconnectArg;
-    DisconnectHandler disconnectHandler;
+    DisconnectArg disconnectArg{};
+    DisconnectHandler disconnectHandler{};
 
-    PollArg pollArg;
-    PollHandler pollHandler;
+    PollArg pollArg{};
+    PollHandler pollHandler{};
 
-    SentArg sentArg;
-    SentHandler sentHandler;
+    SentArg sentArg{};
+    SentHandler sentHandler{};
 
-    RecvArg recvArg;
-    RecvHandler recvHandler;
+    RecvArg recvArg{};
+    RecvHandler recvHandler{};
 
-    ErrorArg errorArg;
-    ErrorHandler errorHandler;
+    ErrorArg errorArg{};
+    ErrorHandler errorHandler{};
 
-    TimeoutArg timeoutArg;
-    TimeoutHandler timeoutHandler;
+    TimeoutArg timeoutArg{};
+    TimeoutHandler timeoutHandler{};
 
-    template <CallbackType TYPE, class... Args>
+    ClientCallbacks(Client* c)
+        : client(c) {
+    }
+
+    template <ClientCallbackType TYPE, class... Args>
     void invoke(Args&&... args) {
-        if constexpr (TYPE == CallbackType::CONNECT) {
+        log_d_("Invoking callback of type %d, client=%p", std::to_underlying(TYPE),
+               client);
+
+        if (!client) {
+            log_e("Client is null");
+            return;
+        }
+
+        if constexpr (TYPE == ClientCallbackType::CONNECT) {
             if (!connectHandler)
                 return;
 
             std::invoke(connectHandler, connectArg, client, std::forward<Args>(args)...);
-        } else if constexpr (TYPE == CallbackType::DISCONNECT) {
+        } else if constexpr (TYPE == ClientCallbackType::DISCONNECT) {
             if (!disconnectHandler)
                 return;
 
             std::invoke(disconnectHandler, disconnectArg, client,
                         std::forward<Args>(args)...);
-        } else if constexpr (TYPE == CallbackType::POLL) {
+        } else if constexpr (TYPE == ClientCallbackType::POLL) {
             if (!pollHandler)
                 return;
 
             std::invoke(pollHandler, pollArg, client, std::forward<Args>(args)...);
-        } else if constexpr (TYPE == CallbackType::SENT) {
+        } else if constexpr (TYPE == ClientCallbackType::SENT) {
             if (!sentHandler)
                 return;
 
             std::invoke(sentHandler, sentArg, client, std::forward<Args>(args)...);
-        } else if constexpr (TYPE == CallbackType::RECV) {
+        } else if constexpr (TYPE == ClientCallbackType::RECV) {
             if (!recvHandler)
                 return;
 
             std::invoke(recvHandler, recvArg, client, std::forward<Args>(args)...);
-        } else if constexpr (TYPE == CallbackType::ERROR) {
+        } else if constexpr (TYPE == ClientCallbackType::ERROR) {
             if (!errorHandler)
                 return;
 
             std::invoke(errorHandler, errorArg, client, std::forward<Args>(args)...);
-        } else if constexpr (TYPE == CallbackType::TIMEOUT) {
+        } else if constexpr (TYPE == ClientCallbackType::TIMEOUT) {
             if (!timeoutHandler)
                 return;
 
             std::invoke(timeoutHandler, timeoutArg, client, std::forward<Args>(args)...);
 
         } else {
-            static_assert(false, "Invalid CallbackType");
+            static_assert(false, "Invalid ClientCallbackType");
             std::unreachable();
         }
     }
+};
+
+enum class ServerCallbackType : std::uint8_t {
+    ACCEPT,
 };
 
 template <class Server,
@@ -126,6 +146,31 @@ struct ServerCallbacks {
 
     AcceptArg acceptArg;
     AcceptHandler acceptHandler;
+
+    ServerCallbacks(Server* s)
+        : server(s) {
+    }
+
+    template <ServerCallbackType TYPE, class... Args>
+    void invoke(Args&&... args) {
+        log_d_("Invoking server callback of type %d, server=%p", std::to_underlying(TYPE),
+               server);
+
+        if (!server) {
+            log_e("Server is null");
+            return;
+        }
+
+        if constexpr (TYPE == ServerCallbackType::ACCEPT) {
+            if (!acceptHandler)
+                return;
+
+            std::invoke(acceptHandler, acceptArg, std::forward<Args>(args)...);
+        } else {
+            static_assert(false, "Invalid ServerCallbackType");
+            std::unreachable();
+        }
+    }
 };
 
 }  // namespace AsyncTcpSock

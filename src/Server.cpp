@@ -1,17 +1,20 @@
 #include "Server.hpp"
 
+#include "Callbacks.hpp"
+
+
 using namespace AsyncTcpSock;
 
 Server::Server(std::uint16_t port)
     : SocketConnection(true), _port(port) {
     manage();
-    log_d("Server created on port %d", port);
+    log_d_("Server created on port %d", port);
 }
 
 Server::Server(IPAddress addr, std::uint16_t port)
     : SocketConnection(true), _addr(addr), _port(port) {
     manage();
-    log_d("Server created on %s:%d", addr.toString().c_str(), port);
+    log_d_("Server created on %s:%d", addr.toString().c_str(), port);
 }
 
 Server::~Server() noexcept {
@@ -30,13 +33,14 @@ void Server::begin() {
         return;
     }
 
-    sockaddr_in server{.sin_len = 0,
-                       .sin_family = AF_INET,
-                       .sin_port = htons(_port),
-                       .sin_addr = {.s_addr = static_cast<std::uint32_t>(_addr)},
-                       .sin_zero = {}};
+    sockaddr server = std::bit_cast<sockaddr>(
+        sockaddr_in{.sin_len = 0,
+                    .sin_family = AF_INET,
+                    .sin_port = htons(_port),
+                    .sin_addr = {.s_addr = static_cast<std::uint32_t>(_addr)},
+                    .sin_zero = {}});
 
-    int res = ::bind(socket, reinterpret_cast<sockaddr*>(&server), sizeof(server));
+    int res = ::bind(socket, &server, sizeof(server));
     if (res < 0) {
         log_e("bind() error: %d (%s)", errno, strerror(errno));
         ::close(socket);
@@ -50,15 +54,10 @@ void Server::begin() {
         return;
     }
 
-    res = ::fcntl(socket, F_SETFL, O_NONBLOCK);
-    if (res < 0) {
-        log_w("fcntl() error: %d (%s)", errno, strerror(errno));
-    }
+    _setSocket(socket);
 
-    _socket = socket;
-
-    log_d("Server acquired socket %d, listening on %s:%d",
-          socket, _addr.toString().c_str(), _port);
+    log_d_("Server acquired socket %d, listening on %s:%d", socket,
+          _addr.toString().c_str(), _port);
 }
 
 void Server::end() {
@@ -68,7 +67,7 @@ void Server::end() {
 
     ::close(_socket.exchange(-1));
 
-    log_d("Server socket closed");
+    log_d_("Server socket closed");
 }
 
 void Server::onClient(Callbacks::AcceptHandler cb, void* arg) {
@@ -110,7 +109,7 @@ void Server::_sockIsReadable() {
     }
 
     client->setNoDelay(_noDelay);
-    _callbacks.acceptHandler(_callbacks.acceptArg, client);
+    _callbacks.invoke<ServerCallbackType::ACCEPT>(client);
 }
 
 void Server::_sockDelayedConnect() {
@@ -124,4 +123,8 @@ void Server::_sockPoll() {
 bool Server::_pendingWrite() {
     // Dummy impl
     return false;
+}
+
+void Server::_processingDone() {
+    // Dummy impl
 }

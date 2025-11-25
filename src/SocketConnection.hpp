@@ -35,7 +35,7 @@ struct SocketConnection {
     SocketConnection(bool isServer);
     SocketConnection(int socket, bool isServer);
 
-    virtual ~SocketConnection() = default;
+    virtual ~SocketConnection() noexcept = default;
 
     SocketConnection(const SocketConnection& other) = delete;
     SocketConnection(SocketConnection&& other) = delete;
@@ -58,6 +58,8 @@ struct SocketConnection {
     virtual void _sockDelayedConnect() = 0;
     // Action to take for an idle socket when the polling timer runs out
     virtual void _sockPoll() = 0;
+    // Action to take when processing is done for this socket in the manager task. Do cleanup here.
+    virtual void _processingDone() = 0;
 
     // Test if there is data pending to be written
     virtual bool _pendingWrite() = 0;
@@ -66,7 +68,6 @@ struct SocketConnection {
 
     // Must be called manually in constructor/destructor of derived classes to ensure
     // correct behavior.
-    // TODO Maybe refactor into a wrapper class
     void manage();
     void unmanage();
 };
