@@ -7,9 +7,11 @@
 #include <variant>
 #include <vector>
 
+#include <esp32-hal-log.h>
 #include <lwip/sockets.h>
 
 #include "Configuration.hpp"
+
 
 namespace AsyncTcpSock {
 
@@ -85,8 +87,6 @@ inline std::size_t write(WriteQueueBuffer& buf, int socket) {
                     log_e("socket %d lwip_write() failed errno=%d", socket, it.errorCode);
                     break;
                 }
-
-                std::this_thread::yield();
             } while (!isFullyWritten_(it));
 
             return writtenTotal;

@@ -270,7 +270,8 @@ template <class Client>
 std::size_t ClientBase<Client>::write(const std::uint8_t* bytes,
                                       std::size_t size,
                                       ClientApiFlags apiFlags) {
-    log_d_("Adding and sending at most %zu bytes to socket %d", size, _socket.load());
+    log_i("Writing %zu/%zu bytes to socket %d", size, _writeSpaceRemaining,
+          _socket.load());
 
     std::size_t toSend = add(bytes, size, apiFlags);
 
@@ -279,9 +280,12 @@ std::size_t ClientBase<Client>::write(const std::uint8_t* bytes,
         return 0;
     }
 
-    if (!send()) {
-        // Sending failed => nothing was written
-        return 0;
+    if (apiFlags.test(ClientApiFlag::IMMEDIATE)) {
+        const bool success = send();
+        if (!success) {
+            // Sending failed => nothing was written
+            return 0;
+        }
     }
 
     return toSend;
@@ -366,9 +370,9 @@ bool ClientBase<Client>::_processWriteQueue(std::unique_lock<std::mutex>&) {
             continue;
         }
 
-        std::size_t written = WriteQueueBufferUtil::write(buf, _socket);
+        const std::size_t written = WriteQueueBufferUtil::write(buf, _socket);
         _writeSpaceRemaining += written;
-        activity = written > 0;
+        activity = activity || written > 0;
     }
 
     return activity;
@@ -499,7 +503,13 @@ bool ClientBase<Client>::_pendingWrite() {
     return (_state != ConnectionState::DISCONNECTED &&
             _state != ConnectionState::CONNECTED) ||
            [&]() {
-               std::lock_guard lock(_writeMutex);
+               if (!_writeMutex.try_lock()) {
+                   // Assume we have something to write if someone else is currently
+                   // writing. Even if the queue were empty, it shouldn't be an issue.
+                   // This prevents stalling the caller until everything is written.
+                   return true;
+               }
+               std::lock_guard lock(_writeMutex, std::adopt_lock);
                return !_writeQueue.empty();
            }();
 }

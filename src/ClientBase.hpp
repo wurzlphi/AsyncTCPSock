@@ -20,33 +20,51 @@
 namespace AsyncTcpSock {
 
 enum class ClientApiFlag : std::uint8_t {
-    COPY = 0b0000'0001,  // will allocate new buffer to hold the data while sending (else
+    COPY = 0b0000'0001,  // Will allocate new buffer to hold the data while sending (else
                          // will hold reference to the data given)
-    MORE = 0b0000'0010   // will not send PSH flag, meaning that there should be more data
-                         // to be sent before the application should react.
+    IMMEDIATE =
+        0b0000'0010,  // If write() is called, also call() send immediately after. Don't
+                      // use this if you write() more data in the SENT callback as this
+                      // causes indirect recursion and a deep stack.
 };
 
 // compatibility
 #define ASYNC_WRITE_FLAG_COPY (AsyncTcpSock::ClientApiFlag::COPY)
-#define ASYNC_WRITE_FLAG_MORE (AsyncTcpSock::ClientApiFlag::MORE)
+#define ASYNC_WRITE_FLAG_MORE ()
 
 struct ClientApiFlags {
     using underlying_type = std::underlying_type_t<ClientApiFlag>;
     underlying_type bits{0};
 
-    inline ClientApiFlags() = default;
-    inline ClientApiFlags(ClientApiFlag value)
+    constexpr ClientApiFlags() = default;
+    constexpr ClientApiFlags(ClientApiFlag value)
         : bits(std::to_underlying(value)) {
     }
 
-    inline void set(ClientApiFlag flag) {
+    constexpr void set(ClientApiFlag flag) {
         bits |= std::to_underlying(flag);
     }
 
-    inline bool test(ClientApiFlag flag) const {
+    constexpr void unset(ClientApiFlag flag) {
+        bits &= ~std::to_underlying(flag);
+    }
+
+    constexpr bool test(ClientApiFlag flag) const {
         return (bits & std::to_underlying(flag)) != 0;
     }
 };
+
+constexpr ClientApiFlags operator|(ClientApiFlag lhs, ClientApiFlag rhs) {
+    ClientApiFlags flags(lhs);
+    flags.set(rhs);
+    return flags;
+}
+
+constexpr ClientApiFlags operator|(const ClientApiFlags& lhs, ClientApiFlag rhs) {
+    ClientApiFlags flags(lhs);
+    flags.set(rhs);
+    return flags;
+}
 
 enum class ConnectionState : std::uint8_t {
     DISCONNECTED,

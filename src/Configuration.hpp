@@ -1,7 +1,7 @@
 #ifndef ASYNCTCPSOCK_CONFIGURATION_HPP
 #define ASYNCTCPSOCK_CONFIGURATION_HPP
 
-#define ASYNC_TCP_ENABLE_DEBUG_LOG 1
+#define ASYNC_TCP_ENABLE_DEBUG_LOG 0
 #if ASYNC_TCP_ENABLE_DEBUG_LOG
 #include <esp32-hal-log.h>
 #define log_d_(...) log_d(__VA_ARGS__)
