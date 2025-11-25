@@ -193,7 +193,7 @@ std::size_t ClientBase<Client>::add(const std::uint8_t* data,
 
     const std::size_t toSend = std::min(remainingSpace, size);
     WriteQueueBuffer buf;
-    if (apiFlags.test(std::to_underlying(ClientApiFlag::COPY))) {
+    if (apiFlags.test(ClientApiFlag::COPY)) {
         buf.emplace<OwnedWriteQueueBuffer>(OwnedWriteQueueBuffer{
             {.queuedAt = std::chrono::steady_clock::now()},
             std::vector<std::uint8_t>(data, data + toSend),
@@ -253,11 +253,17 @@ bool ClientBase<Client>::send() {
 }
 
 template <class Client>
-std::size_t ClientBase<Client>::write(const char* str, ClientApiFlags apiFlags) {
+std::size_t ClientBase<Client>::write(const char* str,
+                                      std::size_t size,
+                                      ClientApiFlags apiFlags) {
     if (str == nullptr)
         return 0;
 
-    return write(reinterpret_cast<const std::uint8_t*>(str), std::strlen(str), apiFlags);
+    if (size == 0) {
+        size = std::strlen(str);
+    }
+
+    return write(reinterpret_cast<const std::uint8_t*>(str), size, apiFlags);
 }
 
 template <class Client>

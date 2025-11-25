@@ -27,10 +27,26 @@ enum class ClientApiFlag : std::uint8_t {
 };
 
 // compatibility
-#define ASYNC_WRITE_FLAG_COPY (std::to_underlying(AsyncTcpSock::ClientApiFlag::COPY))
-#define ASYNC_WRITE_FLAG_MORE (std::to_underlying(AsyncTcpSock::ClientApiFlag::MORE))
+#define ASYNC_WRITE_FLAG_COPY (AsyncTcpSock::ClientApiFlag::COPY)
+#define ASYNC_WRITE_FLAG_MORE (AsyncTcpSock::ClientApiFlag::MORE)
 
-using ClientApiFlags = std::bitset<8>;
+struct ClientApiFlags {
+    using underlying_type = std::underlying_type_t<ClientApiFlag>;
+    underlying_type bits{0};
+
+    inline ClientApiFlags() = default;
+    inline ClientApiFlags(ClientApiFlag value)
+        : bits(std::to_underlying(value)) {
+    }
+
+    inline void set(ClientApiFlag flag) {
+        bits |= std::to_underlying(flag);
+    }
+
+    inline bool test(ClientApiFlag flag) const {
+        return (bits & std::to_underlying(flag)) != 0;
+    }
+};
 
 enum class ConnectionState : std::uint8_t {
     DISCONNECTED,
@@ -103,14 +119,14 @@ class ClientBase : public SocketConnection {
     /// Add the buffer to the send queue. It will be sent by the manager task as soon as
     /// possible.
     std::size_t add(std::span<const std::uint8_t> data,
-                    ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
+                    ClientApiFlags apiFlags = ClientApiFlag::COPY);
     std::size_t add(const std::uint8_t* data,
                     std::size_t size,
-                    ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
+                    ClientApiFlags apiFlags = ClientApiFlag::COPY);
     // compatibility
     std::size_t add(const char* str,
                     std::size_t size = 0,
-                    ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
+                    ClientApiFlags apiFlags = ClientApiFlag::COPY);
     /// Push everything from the send queue to LWIP to immediately send it. Calling this
     /// explicitly is unnecessary, but be aware that any callbacks will run in the
     /// calling thread if you do so.
@@ -119,11 +135,11 @@ class ClientBase : public SocketConnection {
     /// Adds data to the send queue and immediately attempts to send it if the queue
     /// wasn't full.
     std::size_t write(const char* str,
-                      ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
+                      std::size_t size = 0,
+                      ClientApiFlags apiFlags = ClientApiFlag::COPY);
     std::size_t write(const std::uint8_t* bytes,
                       std::size_t size,
-                      ClientApiFlags apiFlags = std::to_underlying(ClientApiFlag::COPY));
-
+                      ClientApiFlags apiFlags = ClientApiFlag::COPY);
     // If true, disables Nagle's algorithm (TCP_NODELAY)
     void setNoDelay(bool nodelay);
     bool getNoDelay();
