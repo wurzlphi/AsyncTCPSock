@@ -48,6 +48,8 @@ constexpr const char* errorToString(int8_t error) {
 
 class Client : public ClientBase<Client> {
   public:
+    static constexpr bool IS_SERVER = false;
+
     static constexpr const char* errorToString(int8_t error) {
         return AsyncTcpSock::errorToString(error);
     }

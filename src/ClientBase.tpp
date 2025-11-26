@@ -37,19 +37,19 @@ void ClientBase<Client>::dnsFoundCallback(const char* _, const ip_addr_t* ip, vo
         c->_ip = IPAddress();
     }
 
-    c->_isdnsfinished = true;
+    c->_dnsFinished = true;
 
     // TODO: actually use name
 }
 
 template <class Client>
 ClientBase<Client>::ClientBase()
-    : SocketConnection(false) {
+    : SocketConnection() {
 }
 
 template <class Client>
 ClientBase<Client>::ClientBase(int socket)
-    : SocketConnection(socket, false) {
+    : SocketConnection(socket) {
     if (_socket > 0) {
         _state = ConnectionState::CONNECTED;
         _rx_last_packet = std::chrono::steady_clock::now();
@@ -95,7 +95,7 @@ bool ClientBase<Client>::connect(IPAddress ip, std::uint16_t port) {
     _port = port;
 
     // Updating state visible to asyncTcpSock task
-    _setSocket(socket);
+    _configureSocket(socket);
 
     // Socket is now connecting. Should become writable in asyncTcpSock task, which then
     // updates the state in _sockIsWritable().

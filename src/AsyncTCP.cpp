@@ -21,7 +21,27 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-// #include "AsyncTCP.h"
+#include "AsyncTCP.h"
+
+namespace AsyncTcpSock {
+template <>
+void manage<Client>(Client* conn) {
+    AsyncSocketConnectionManager::instance().addConnection(conn);
+}
+template <>
+void manage<Server>(Server* conn) {
+    AsyncSocketConnectionManager::instance().addConnection(conn);
+}
+
+template <>
+void unmanage<Client>(Client* conn) {
+    AsyncSocketConnectionManager::instance().removeConnection(conn);
+}
+template <>
+void unmanage<Server>(Server* conn) {
+    AsyncSocketConnectionManager::instance().removeConnection(conn);
+}
+}  // namespace AsyncTcpSock
 
 // #include <atomic>
 

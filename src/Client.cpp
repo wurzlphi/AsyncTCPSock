@@ -42,16 +42,16 @@ constexpr Result withSockAddr(Getter&& getter, FuncIPv4&& useIpv4, FuncIPv6 useI
 
 Client::Client()
     : ClientBase<Client>() {
-    manage();
+    manage(this);
 }
 
 Client::Client(int socket)
     : ClientBase<Client>(socket) {
-    manage();
+    manage(this);
 }
 
 Client::~Client() noexcept {
-    unmanage();
+    unmanage(this);
 }
 
 IPAddress Client::remoteIP() const {

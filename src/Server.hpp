@@ -11,6 +11,7 @@ class Server : public SocketConnection {
     using ClientType = Client;
     using Callbacks = ServerCallbacks<Server>;
 
+    static constexpr bool IS_SERVER = true;
     static constexpr int BACKLOG = 5;
 
   private:
@@ -39,7 +40,7 @@ class Server : public SocketConnection {
     // Disable Nagle's algorithm on new connections
     void setNoDelay(bool noDelay);
 
-  protected:
+  public:
     bool _sockIsWriteable() override;
     void _sockIsReadable() override;
     void _sockDelayedConnect() override;

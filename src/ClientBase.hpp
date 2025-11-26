@@ -204,6 +204,7 @@ class ClientBase : public SocketConnection {
     bool _checkAckTimeout();
     bool _checkRxTimeout();
 
+  public:
     // SocketConnection
     bool _pendingWrite() override;
 

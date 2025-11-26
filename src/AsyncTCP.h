@@ -28,8 +28,14 @@
 #include "Client.hpp"
 #include "Server.hpp"
 
+static_assert(AsyncTcpSock::ManagedClient<AsyncTcpSock::Client>);
+static_assert(AsyncTcpSock::ManagedServer<AsyncTcpSock::Server>);
+
+using AsyncSocketConnectionManager =
+    AsyncTcpSock::SocketConnectionManager<std::variant<AsyncTcpSock::Client*>,
+                                          std::variant<AsyncTcpSock::Server*>>;
+
 using AsyncClient = AsyncTcpSock::Client;
 using AsyncServer = AsyncTcpSock::Server;
 
 #endif /* ASYNCTCP_H_ */
-

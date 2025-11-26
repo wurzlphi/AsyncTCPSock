@@ -7,18 +7,18 @@ using namespace AsyncTcpSock;
 
 Server::Server(std::uint16_t port)
     : SocketConnection(true), _port(port) {
-    manage();
+    manage(this);
     log_d_("Server created on port %d", port);
 }
 
 Server::Server(IPAddress addr, std::uint16_t port)
     : SocketConnection(true), _addr(addr), _port(port) {
-    manage();
+    manage(this);
     log_d_("Server created on %s:%d", addr.toString().c_str(), port);
 }
 
 Server::~Server() noexcept {
-    unmanage();
+    unmanage(this);
     end();
 }
 
@@ -54,7 +54,7 @@ void Server::begin() {
         return;
     }
 
-    _setSocket(socket);
+    _configureSocket(socket);
 
     log_d_("Server acquired socket %d, listening on %s:%d", socket,
           _addr.toString().c_str(), _port);
