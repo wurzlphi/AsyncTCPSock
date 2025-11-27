@@ -49,6 +49,18 @@ inline bool SocketConnection::isOpen() const {
     return _socket != -1;
 }
 
+inline int SocketConnection::getSocket() const {
+    return _socket.load();
+}
+
+inline bool SocketConnection::isDnsFinished() const {
+    return _dnsFinished.load();
+}
+
+inline void SocketConnection::setDnsFinished(bool finished) {
+    _dnsFinished = finished;
+}
+
 inline std::chrono::steady_clock::time_point SocketConnection::getLastActive() const {
     return _lastActive;
 }
@@ -103,21 +115,20 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
         log_d_("Collecting active sockets for select()...");
 
         manager.iterateClients([&](auto&& it) {
-            const int socket = it->_socket.load();
+            const int socket = it->getSocket();
             log_d_("Checking client %p with socket %d", it, socket);
 
             if (socket != -1) {
-                FD_SET(socket, &sockSet_r);
                 max_sock = std::max(max_sock, socket + 1);
 
+                FD_SET(socket, &sockSet_r);
                 if (it->_pendingWrite()) {
                     FD_SET(socket, &sockSet_w);
-                    max_sock = std::max(max_sock, socket + 1);
                 }
             }
         });
         manager.iterateServers([&](auto&& it) {
-            const int socket = it->_socket.load();
+            const int socket = it->getSocket();
             log_d_("Checking server %p with socket %d", it, socket);
 
             if (socket != -1) {
@@ -142,7 +153,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
                 // should have set _socket to -1 and therefore should not end up in
                 // the sockList.
                 manager.iterateClients([&](auto&& it) {
-                    if (FD_ISSET(it->_socket.load(), &sockSet_w)) {
+                    if (FD_ISSET(it->getSocket(), &sockSet_w)) {
                         clientsProcessing.push_back(it);
                     }
                 });
@@ -169,7 +180,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
                 // should have set _socket to -1 and therefore should not end up in
                 // the sockList.
                 manager.iterateClients([&](auto&& it) {
-                    if (FD_ISSET(it->_socket.load(), &sockSet_r)) {
+                    if (FD_ISSET(it->getSocket(), &sockSet_r)) {
                         clientsProcessing.push_back(it);
                     }
                 });
@@ -194,7 +205,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
                 // should have set _socket to -1 and therefore should not end up in
                 // the sockList.
                 manager.iterateServers([&](auto&& it) {
-                    if (FD_ISSET(it->_socket.load(), &sockSet_r)) {
+                    if (FD_ISSET(it->getSocket(), &sockSet_r)) {
                         serversProcessing.push_back(it);
                     }
                 });
@@ -221,7 +232,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
             manager.iterateClients([&](auto&& it) {
                 // Collect socket that has finished resolving DNS (with or without
                 // error)
-                if (it->_dnsFinished) {
+                if (it->isDnsFinished()) {
                     clientsProcessing.push_back(it);
                 }
             });
@@ -230,7 +241,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
                 enter_wdt();
                 std::visit(
                     [](auto&& c) {
-                        c->_dnsFinished = false;
+                        c->setDnsFinished(false);
                         c->_sockDelayedConnect();
                     },
                     client);

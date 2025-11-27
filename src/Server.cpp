@@ -2,7 +2,6 @@
 
 #include "Callbacks.hpp"
 
-
 using namespace AsyncTcpSock;
 
 Server::Server(std::uint16_t port)
@@ -57,7 +56,7 @@ void Server::begin() {
     _configureSocket(socket);
 
     log_d_("Server acquired socket %d, listening on %s:%d", socket,
-          _addr.toString().c_str(), _port);
+           _addr.toString().c_str(), _port);
 }
 
 void Server::end() {
@@ -77,11 +76,6 @@ void Server::onClient(Callbacks::AcceptHandler cb, void* arg) {
 
 void Server::setNoDelay(bool noDelay) {
     _noDelay = noDelay;
-}
-
-bool Server::_sockIsWriteable() {
-    // TODO Refactor to avoid empty implementations
-    return false;
 }
 
 void Server::_sockIsReadable() {
@@ -110,21 +104,4 @@ void Server::_sockIsReadable() {
 
     client->setNoDelay(_noDelay);
     _callbacks.invoke<ServerCallbackType::ACCEPT>(client);
-}
-
-void Server::_sockDelayedConnect() {
-    // Dummy impl
-}
-
-void Server::_sockPoll() {
-    // Dummy impl
-}
-
-bool Server::_pendingWrite() {
-    // Dummy impl
-    return false;
-}
-
-void Server::_processingDone() {
-    // Dummy impl
 }

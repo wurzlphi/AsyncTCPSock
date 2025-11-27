@@ -40,13 +40,8 @@ class Server : public SocketConnection {
     // Disable Nagle's algorithm on new connections
     void setNoDelay(bool noDelay);
 
-  public:
-    bool _sockIsWriteable() override;
-    void _sockIsReadable() override;
-    void _sockDelayedConnect() override;
-    void _sockPoll() override;
-    bool _pendingWrite() override;
-    void _processingDone() override;
+    // Required by ManagedServer concept
+    void _sockIsReadable();
 };
 
 }  // namespace AsyncTcpSock

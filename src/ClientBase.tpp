@@ -37,9 +37,7 @@ void ClientBase<Client>::dnsFoundCallback(const char* _, const ip_addr_t* ip, vo
         c->_ip = IPAddress();
     }
 
-    c->_dnsFinished = true;
-
-    // TODO: actually use name
+    c->setDnsFinished(true);
 }
 
 template <class Client>
@@ -252,7 +250,7 @@ bool ClientBase<Client>::send() {
     if (ready > 0) {
         // Basically does the same as _sockIsWriteable() but avoids sending notifications
         // to prevent callers from deadlocking when the SENT callback is invoked.
-        // The SENT callback is then invoked later in _sockPoll().
+        // The SENT callback is then invoked later in _sockPoll
         std::unique_lock lock(_writeMutex);
         if (!_writeQueue.empty()) {
             return _processWriteQueue(lock);

@@ -206,15 +206,15 @@ class ClientBase : public SocketConnection {
     bool _checkRxTimeout();
 
   public:
-    // SocketConnection
-    bool _pendingWrite() override;
+    // Required by ManagedClient concept
+    bool _pendingWrite();
 
-    bool _sockIsWriteable() override;
-    void _sockIsReadable() override;
+    bool _sockIsWriteable();
+    void _sockIsReadable();
 
-    void _sockDelayedConnect() override;
-    void _sockPoll() override;
-    void _processingDone() override;
+    void _sockDelayedConnect();
+    void _sockPoll();
+    void _processingDone();
 };
 
 }  // namespace AsyncTcpSock

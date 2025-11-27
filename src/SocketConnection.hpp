@@ -19,13 +19,27 @@
 
 namespace AsyncTcpSock {
 
+// Forward declaration used by clients and servers to register/unregister themselves with
+// the manager instance. The project must contain an explicit specialization somewhere for
+// each class to be managed.
 template <class Connection>
 void manage(Connection* conn);
 template <class Connection>
 void unmanage(Connection* conn);
 
 template <class Impl>
-concept ManagedClient = requires(Impl impl) {
+concept ManagedConnection = requires(Impl impl) {
+    { impl.isOpen() } -> std::same_as<bool>;
+    { impl.getSocket() } -> std::same_as<int>;
+    { impl.isDnsFinished() } -> std::same_as<bool>;
+    { impl.setDnsFinished(bool{}) } -> std::same_as<void>;
+    { impl.getLastActive() } -> std::same_as<std::chrono::steady_clock::time_point>;
+    { impl.setLastActive(std::chrono::steady_clock::time_point{}) } -> std::same_as<void>;
+    { impl.setLastActive() } -> std::same_as<void>;
+};
+
+template <class Impl>
+concept ManagedClient = ManagedConnection<Impl> && requires(Impl impl) {
     requires !Impl::IS_SERVER;
     // Action to take on a writable socket
     { impl._sockIsWriteable() } -> std::same_as<bool>;
@@ -43,7 +57,7 @@ concept ManagedClient = requires(Impl impl) {
 };
 
 template <class Impl>
-concept ManagedServer = requires(Impl impl) {
+concept ManagedServer = ManagedConnection<Impl> && requires(Impl impl) {
     requires Impl::IS_SERVER;
     // Action to take on a readable socket
     { impl._sockIsReadable() } -> std::same_as<void>;
@@ -81,12 +95,18 @@ concept ServerVariantType = detail::isVariantOfServerPointers<Variant>::value;
 
 /**
  * Formerly AsyncSocketBase
+ *
+ * Base class for TCP clients and servers. Implementing classes must also adhere to the
+ * concepts ManagedClient resp. ManagedServer if they want to be managed by the
+ * SocketConnectionManager.
  */
 struct SocketConnection {
+  protected:
     std::atomic<int> _socket = -1;
     std::atomic<bool> _dnsFinished = false;
     std::chrono::steady_clock::time_point _lastActive = std::chrono::steady_clock::now();
 
+  public:
     SocketConnection();
     SocketConnection(int socket);
 
@@ -99,25 +119,16 @@ struct SocketConnection {
     SocketConnection& operator=(SocketConnection&& other) = delete;
 
     bool isOpen() const;
+    int getSocket() const;
+
+    bool isDnsFinished() const;
+    void setDnsFinished(bool finished);
 
     std::chrono::steady_clock::time_point getLastActive() const;
     void setLastActive(
         std::chrono::steady_clock::time_point when = std::chrono::steady_clock::now());
 
-    // Action to take on a writable socket
-    virtual bool _sockIsWriteable() = 0;
-    // Action to take on a readable socket
-    virtual void _sockIsReadable() = 0;
-    // Action to take when DNS-resolution is finished
-    virtual void _sockDelayedConnect() = 0;
-    // Action to take for an idle socket when the polling timer runs out
-    virtual void _sockPoll() = 0;
-    // Action to take when processing is done for this socket in the manager task. Do
-    // cleanup here.
-    virtual void _processingDone() = 0;
-    // Test if there is data pending to be written
-    virtual bool _pendingWrite() = 0;
-
+  protected:
     void _configureSocket(int socket);
 };
 

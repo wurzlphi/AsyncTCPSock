@@ -22,8 +22,8 @@ class SslClient : public Client {
     bool _processWriteQueue(std::unique_lock<std::mutex>& writeQueueLock) override;
 
     // SocketConnection
-    bool _sockIsWriteable() override;
-    void _sockIsReadable() override;
+    bool _sockIsWriteable();
+    void _sockIsReadable();
 };
 
 }  // namespace AsyncTcpSock
