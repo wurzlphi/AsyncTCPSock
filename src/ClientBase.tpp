@@ -74,49 +74,53 @@ bool ClientBase<Client>::connect(IPAddress ip, std::uint16_t port) {
         return false;
     }
 
-    sockaddr serveraddr = std::bit_cast<sockaddr>(sockaddr_in{.sin_len = 0,
-                                                              .sin_family = AF_INET,
-                                                              .sin_port = htons(port),
-                                                              .sin_addr = {.s_addr = ip},
-                                                              .sin_zero = {}});
+    sockaddr serveraddr = std::bit_cast<sockaddr>(
+        sockaddr_in{.sin_len = sizeof(sockaddr_in),
+                    .sin_family = AF_INET,
+                    .sin_port = htons(port),
+                    .sin_addr = {.s_addr = static_cast<std::uint32_t>(ip)},
+                    .sin_zero = {}});
 
-    // Serial.printf("DEBUG: connect to %08x port %d using IP... ", ip_addr, port);
+    log_d_("connecting to %s:%d on socket %d", ip.toString().c_str(), port, socket);
+
     errno = 0;
-    int result = ::connect(socket, &serveraddr, sizeof(serveraddr));
-    // Serial.printf("r=%d errno=%d\r\n", r, errno);
+    int result = ::connect(socket, &serveraddr, sizeof(sockaddr_in));
     if (result < 0 && errno != EINPROGRESS) {
-        // Serial.println("\t(connect failed)");
-        log_e("connect on fd %d, errno: %d, \"%s\"", socket, errno, strerror(errno));
+        log_e("connect to %s:%d on socket %d failed, errno: %d (%s)",
+              ip.toString().c_str(), port, socket, errno, strerror(errno));
         ::close(socket);
         return false;
     }
 
     _ip = ip;
     _port = port;
+    _state = ConnectionState::CONNECTING;
 
     // Updating state visible to asyncTcpSock task
     _configureSocket(socket);
 
     // Socket is now connecting. Should become writable in asyncTcpSock task, which then
     // updates the state in _sockIsWritable().
+    log_i("successfully connected to %s:%d on socket %d", ip.toString().c_str(), port,
+          socket);
     return true;
 }
 
 template <class Client>
 bool ClientBase<Client>::connect(const char* host, std::uint16_t port) {
-    log_v("connect to %s port %d using DNS...", host, port);
+    log_d_("connect to %s port %d using DNS...", host, port);
 
     ip_addr_t addr;
     err_t err = dns_gethostbyname(host, &addr, &dnsFoundCallback, this);
 
     if (err == ERR_OK) {
         IPAddress resolved(&addr);
-        log_v("\taddr resolved as %s, connecting...", resolved.toString().c_str());
+        log_d_("\taddr resolved as %s, connecting...", resolved.toString().c_str());
 
         return connect(std::move(resolved), port);
 
     } else if (err == ERR_INPROGRESS) {
-        log_v("\twaiting for DNS resolution");
+        log_d_("\twaiting for DNS resolution");
         _state = ConnectionState::WAITING_FOR_DNS;
         _port = port;
 
@@ -246,7 +250,13 @@ bool ClientBase<Client>::send() {
 
     int ready = select(_socket + 1, nullptr, &sockSet_w, nullptr, &tv);
     if (ready > 0) {
-        return _sockIsWriteable();
+        // Basically does the same as _sockIsWriteable() but avoids sending notifications
+        // to prevent callers from deadlocking when the SENT callback is invoked.
+        // The SENT callback is then invoked later in _sockPoll().
+        std::unique_lock lock(_writeMutex);
+        if (!_writeQueue.empty()) {
+            return _processWriteQueue(lock);
+        }
     }
 
     return false;

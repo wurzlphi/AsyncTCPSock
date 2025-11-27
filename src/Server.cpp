@@ -6,13 +6,13 @@
 using namespace AsyncTcpSock;
 
 Server::Server(std::uint16_t port)
-    : SocketConnection(true), _port(port) {
+    : SocketConnection(), _port(port) {
     manage(this);
     log_d_("Server created on port %d", port);
 }
 
 Server::Server(IPAddress addr, std::uint16_t port)
-    : SocketConnection(true), _addr(addr), _port(port) {
+    : SocketConnection(), _addr(addr), _port(port) {
     manage(this);
     log_d_("Server created on %s:%d", addr.toString().c_str(), port);
 }

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 
 #include <esp32-hal-log.h>
 #include <esp32-hal.h>
@@ -103,6 +104,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
 
         manager.iterateClients([&](auto&& it) {
             const int socket = it->_socket.load();
+            log_d_("Checking client %p with socket %d", it, socket);
 
             if (socket != -1) {
                 FD_SET(socket, &sockSet_r);
@@ -116,6 +118,7 @@ void SocketConnectionManager<ClientVariant, ServerVariant>::updateConnectionStat
         });
         manager.iterateServers([&](auto&& it) {
             const int socket = it->_socket.load();
+            log_d_("Checking server %p with socket %d", it, socket);
 
             if (socket != -1) {
                 if (manager.hasFreeSocket()) {

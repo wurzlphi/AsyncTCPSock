@@ -69,6 +69,7 @@ constexpr ClientApiFlags operator|(const ClientApiFlags& lhs, ClientApiFlag rhs)
 enum class ConnectionState : std::uint8_t {
     DISCONNECTED,
     WAITING_FOR_DNS,
+    CONNECTING,
     CONNECTED,
     DISCONNECTING,
 };
