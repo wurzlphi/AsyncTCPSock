@@ -2,7 +2,6 @@
 #define ASYNCTCPSOCK_CLIENTBASE_HPP
 
 #include <array>
-#include <bitset>
 #include <chrono>
 #include <cstdint>
 #include <span>
