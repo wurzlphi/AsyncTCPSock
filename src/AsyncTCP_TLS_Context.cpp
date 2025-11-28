@@ -255,9 +255,9 @@ int AsyncTCP_TLS_Context::runSSLHandshake(void)
     // Handshake completed, validate remote side if required...
 
     if (_have_client_cert && _have_client_key) {
-        log_d("Protocol is %s Ciphersuite is %s", mbedtls_ssl_get_version(&ssl_ctx), mbedtls_ssl_get_ciphersuite(&ssl_ctx));
+        log_d_("Protocol is %s Ciphersuite is %s", mbedtls_ssl_get_version(&ssl_ctx), mbedtls_ssl_get_ciphersuite(&ssl_ctx));
         if ((ret = mbedtls_ssl_get_record_expansion(&ssl_ctx)) >= 0) {
-            log_d("Record expansion is %d", ret);
+            log_d_("Record expansion is %d", ret);
         } else {
             log_w("Record expansion is unknown (compression)");
         }
