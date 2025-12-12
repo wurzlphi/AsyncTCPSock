@@ -1,0 +1,26 @@
+BasedOnStyle: Google
+IndentWidth: 4
+DerivePointerAlignment: false
+PointerAlignment: Left
+ColumnLimit: 90
+AccessModifierOffset: -2
+AllowShortBlocksOnASingleLine: Never
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+PenaltyReturnTypeOnItsOwnLine: 150
+IndentCaseLabels: true
+PackConstructorInitializers: NextLineOnly
+BinPackParameters: false
+BinPackArguments: true
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+
+IncludeCategories:
+  - Regex: '<[[:alnum:]_]+>'
+    Priority: 2
+  - Regex: '<[[:alnum:]_./-]+>'
+    Priority: 4
+  - Regex: '.*'
+    Priority: 8
